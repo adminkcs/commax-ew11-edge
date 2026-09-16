@@ -61,6 +61,26 @@ local protocol = {
   ACK_GAS          = 0x91,
   GAS_OPEN         = 0xA0,
   GAS_CLOSED       = 0x50,
+
+  -- Air quality sensors (read-only, passively broadcast - no commands).
+  -- CONFIRMED 2026-09-17 by real EW11 capture, matched live against the
+  -- wallpad's own display: "C8 31 01 13 13 00 01 21" arrived while the
+  -- wallpad showed PM2.5=1 and "C8 3F 01 13 13 00 01 2F" while it showed
+  -- PM10=1, and "F7 82 01 00 1A 13 13 BA" arrived while it showed CO2=1313
+  -- - then tracked live as CO2 fell (1313 -> 1235 -> 1223 -> 1221) exactly
+  -- matching the same two trailing bytes each time. In all three, the
+  -- value is bytes 6-7 (1-based, i.e. the last 2 bytes before checksum)
+  -- decoded as one 2-byte BCD number (bcd.decode_word). This matches the
+  -- "index 5 length 2 decode bcd" field described in homenet2mqtt's
+  -- haatz_air_quality_sensors.yaml, except our unit's PM10 second-byte
+  -- (0x3F) differs from that doc's 0x39 - our real value is used here.
+  HEAD_CO2         = 0xF7,
+  CO2_SUB1         = 0x82,
+  CO2_SUB2         = 0x01,
+  HEAD_DUST        = 0xC8,
+  DUST_PM25        = 0x31,
+  DUST_PM10        = 0x3F,
+  DUST_SUB2        = 0x01,
 }
 
 --- Calculate 8-bit sum checksum for bytes 1..7
@@ -309,6 +329,30 @@ function protocol.parse_packet(raw_bytes)
       device_type = "gas",
       id = 1,
       is_open = is_open,
+      raw = raw_bytes
+    }
+
+  -- 5. CO2 Sensor (0xF7 0x82 0x01 ...) - read-only, no command exists
+  -- Packet: [0xF7, 0x82, 0x01, 0x00, 0x1A, CO2_hi(BCD), CO2_lo(BCD), CS]
+  -- CONFIRMED 2026-09-17 by real EW11 capture matched live against the
+  -- wallpad display (see HEAD_CO2 comment above).
+  elseif head == protocol.HEAD_CO2 and b[2] == protocol.CO2_SUB1 and b[3] == protocol.CO2_SUB2 then
+    return {
+      device_type = "co2",
+      id = 1,
+      ppm = bcd.decode_word(b[6], b[7]),
+      raw = raw_bytes
+    }
+
+  -- 6. Dust Sensor: PM2.5 (0xC8 0x31 0x01 ...) / PM10 (0xC8 0x3F 0x01 ...)
+  -- Packet: [0xC8, sub, 0x01, ?, ?, PM_hi(BCD), PM_lo(BCD), CS]
+  -- CONFIRMED 2026-09-17 the same way as CO2 above.
+  elseif head == protocol.HEAD_DUST and b[3] == protocol.DUST_SUB2
+      and (b[2] == protocol.DUST_PM25 or b[2] == protocol.DUST_PM10) then
+    return {
+      device_type = (b[2] == protocol.DUST_PM25) and "pm25" or "pm10",
+      id = 1,
+      ug_m3 = bcd.decode_word(b[6], b[7]),
       raw = raw_bytes
     }
   end

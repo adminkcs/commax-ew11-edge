@@ -39,6 +39,7 @@ function commax_driver:sync_child_devices(bridge_device)
   local heater_count = math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4))
   local enable_fan = (prefs.enableFan ~= false)
   local enable_gas = (prefs.enableGas ~= false)
+  local enable_air_quality = (prefs.enableAirQuality ~= false)
 
   -- 1. Create Lights
   for i = 1, light_count do
@@ -94,6 +95,21 @@ function commax_driver:sync_child_devices(bridge_device)
         type = "EDGE_CHILD",
         label = "코맥스 가스밸브",
         profile = "commax-gas",
+        parent_device_id = bridge_device.id,
+        device_network_id = dni
+      })
+    end
+  end
+
+  -- 5. Create Air Quality Sensor (CO2/PM2.5/PM10, read-only)
+  if enable_air_quality then
+    local dni = "commax:airquality:1"
+    if not self:get_device_by_dni(dni) then
+      log.info("[Init] Creating child air quality sensor device")
+      safe_create_device(self, {
+        type = "EDGE_CHILD",
+        label = "코맥스 공기질 센서",
+        profile = "commax-airquality",
         parent_device_id = bridge_device.id,
         device_network_id = dni
       })

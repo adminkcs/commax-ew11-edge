@@ -108,12 +108,24 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 이 캡처에서 추가로 관측됐지만 **이번 개발 범위(조명/난방/환기/가스) 밖**이라 구현하지 않은 장치:
 
 - 콘센트/플러그로 추정되는 주기적 상태(`79`/`F9`, 매우 빈번)
-- 온습도/공기질 센서로 추정되는 값(`F7 82 01 00 1A ...`, PM2.5/PM10으로 추정되는 두 필드가 서서히 변화)
 - 월패드 자체의 시각 브로드캐스트로 추정(`7F 26 09 16 23 43 ...` → BCD로 "2026-09-16 23:43:xx"와 캡처 시각이 일치)
 - 일괄소등/조명 차단기로 추정(`20`/`A0`)
-- 가스 조회 패킷으로 추정(`10 ID`)
 
 이 장치들은 실제 필요성이 확인되면 추후 별도로 분석 후 추가할 수 있다.
+
+### 3.4 공기질 센서(CO2/PM2.5/PM10) — 실측으로 확정 및 추가 (2026-09-17)
+
+3.3절에서 "헤더 불일치로 보류"했던 공기질 센서를 **월패드 화면 숫자와 실시간으로 직접 대조**해서 확정했다.
+
+| 항목 | 패킷 | 실측 검증 방법 | 결과 |
+|---|---|---|---|
+| CO2 | `F7 82 01 00 1A [BCD hi][BCD lo] [cs]` | 월패드가 "1313"→"1235"→"1223"→"1221"로 표시하는 순간마다 캡처값의 마지막 2바이트가 정확히 같은 숫자로 일치(BCD 2바이트 = ppm) | **확정** |
+| PM2.5 | `C8 31 01 ?? ?? [BCD hi][BCD lo] [cs]` | 월패드 PM2.5=1 표시 시점에 `C8 31 01 13 13 00 01 21` 관측, 마지막 2바이트 BCD=`0001`=1 | **확정** |
+| PM10 | `C8 3F 01 ?? ?? [BCD hi][BCD lo] [cs]` | 월패드 PM10=1 표시 시점에 `C8 3F 01 13 13 00 01 2F` 관측, 마지막 2바이트 BCD=`0001`=1 | **확정**(단, 두 번째 바이트가 homenet2mqtt 문서의 `0x39`가 아니라 `0x3F` — 우리 집 모델 실측값 사용) |
+
+값 인코딩은 homenet2mqtt `haatz_air_quality_sensors.yaml`이 설명한 "마지막 2바이트를 BCD 2바이트 숫자로 디코딩"(`bcd.decode_word`) 규칙과 정확히 일치했다. 다만 discovery 헤더의 두 번째/세 번째 바이트는 문서와 다르고, 우리 실측값(`F7 82 01`, `C8 31 01`, `C8 3F 01`)을 그대로 코드에 반영했다.
+
+`commax-airquality` 프로필(SmartThings 표준 capability: `carbonDioxideMeasurement`, `dustSensor`(PM10 → `fineDustLevel`), `veryFineDustSensor`(PM2.5 → `veryFineDustLevel`))로 읽기 전용 센서 Device를 추가했다. 명령은 없다(원래 이 장치는 상태 브로드캐스트만 존재).
 
 ## 4. SmartThings Device / Capability 설계
 
@@ -124,6 +136,7 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 | `commax-thermostat` | thermostatMode, thermostatOperatingState, thermostatHeatingSetpoint, temperatureMeasurement, refresh | `handle_thermostat_mode`, `handle_heating_setpoint` |
 | `commax-fan` | switch, fanSpeed, refresh | `handle_switch_on/off`, `handle_fan_speed` |
 | `commax-gas` | valve, refresh | `handle_valve_close` (open은 항상 차단) |
+| `commax-airquality` | carbonDioxideMeasurement, dustSensor, veryFineDustSensor, refresh | 명령 없음(읽기 전용, `handle_parsed_packet`만) |
 
 데이터 흐름: `SmartThings Capability → device_handler.lua → commax_protocol.lua (패킷 생성) → ew11.lua (TCP 송신)`, 수신은 `ew11.lua (TCP 수신/프레이밍) → commax_protocol.lua (파싱) → device_handler.lua (Capability 이벤트 emit)`.
 
@@ -137,15 +150,19 @@ commax-ew11-edge/
 │   ├── commax-light.yml
 │   ├── commax-thermostat.yml
 │   ├── commax-fan.yml
-│   └── commax-gas.yml
+│   ├── commax-gas.yml
+│   └── commax-airquality.yml
 ├── src/
 │   ├── init.lua              # 드라이버 라이프사이클, 자식기기 생성, 캡ability 라우팅
 │   ├── device_handler.lua    # Capability ↔ 프로토콜 연결
 │   ├── ew11.lua              # EW11 TCP 클라이언트, 프레이밍
-│   ├── commax_protocol.lua   # 패킷 빌더/파서 (유일한 근거: homenet2mqtt)
-│   └── bcd.lua                # BCD 인코딩/디코딩 (온도)
+│   ├── commax_protocol.lua   # 패킷 빌더/파서 (유일한 근거: homenet2mqtt + 실측)
+│   └── bcd.lua                # BCD 인코딩/디코딩 (온도, CO2, PM2.5/PM10)
+├── tools/
+│   └── capture_ew11.ps1      # 실제 EW11 패킷 캡처/로깅 진단 스크립트
 ├── tests/
-│   └── test_commax_protocol.lua
+│   ├── test_commax_protocol.lua
+│   └── test_ew11_buffer.lua
 └── README.md
 ```
 
@@ -161,6 +178,7 @@ commax-ew11-edge/
 | Number of Thermostats | 4 | 실제 난방 구역 수(0~9) |
 | Enable Ventilation Fan | true | 참고 저장소 기준 구현(3절 주의사항 참고) |
 | Enable Gas Valve | true | 상태조회 + 닫기만 |
+| Enable Air Quality Sensor | true | CO2/PM2.5/PM10 (읽기 전용) |
 | Heater Status Polling Interval | 10초 | 0으로 설정 시 폴링 비활성화 |
 
 ## 7. 설치 / 등록 / 테스트 방법
@@ -228,11 +246,9 @@ lua tests/test_commax_protocol.lua
 - 이 드라이버의 처리: "정확히 0xA0일 때만 open, 그 외 전부 closed로 간주"하는 fail-safe 파싱을 유지 — 열림 바이트가 실제로 다르더라도 항상 "닫힘"으로만 잘못 표시될 뿐, 닫혀있는데 "열림"으로 잘못 표시될 위험은 없음
 - 다음 작업 시 참고: 가스밸브가 실제로 열려 있는 상태(예: 밸브를 잠깐 원상태로 열어야 하는 상황이 생겼을 때)에 EW11 로그를 확인해서 상태 패킷의 byte1/byte2가 정말 `0xA0`인지 검증할 것
 
-정보 불충분 — 공기질/온습도 센서 (조사했지만 헤더 불일치로 미구현)
-- 실측 캡처에서 `F7 82 01 00 1A [06~23 변화] [44~92 변화] [cs]` 패턴이 주기적으로 관측됨(값이 PM2.5/PM10처럼 서서히 변화)
-- homenet2mqtt의 `haatz_air_quality_sensors.yaml`을 확인했으나, CO2 discovery 헤더가 `F7 A0 01`(우리 캡처는 `F7 82 01`), PM2.5/PM10 discovery 헤더가 `C8 31/39 01`(우리 캡처는 `C8 11/1F 01`)로 **두 번째 바이트가 일치하지 않음** — 즉 이 문서의 정의를 우리 캡처값에 그대로 적용할 근거가 없음
-- 이 드라이버의 처리: 구현하지 않음(이번 개발 범위 밖이기도 함) — 헤더가 다른 것이 "다른 서브채널/다른 센서 모델"인지 확인 안 됨
-- 다음 작업 시 참고: 이 장치를 실제로 추가하고 싶다면, 먼저 `haatz_air_quality_sensors.yaml`처럼 정확히 `F7 82 01`/`C8 11 01`/`C8 1F 01` discovery 헤더를 쓰는 다른 gallery 파일이 있는지 찾거나, 우리 집 냉난방기/전열교환기 제품 모델명을 근거로 재검색할 것
+정보 불충분 — 공기질 센서 Device의 SmartThings capability 이름 미검증
+- 2026-09-17 실측으로 CO2/PM2.5/PM10 패킷 자체는 확정됐다(3.4절 참고). 다만 `profiles/commax-airquality.yml`과 `device_handler.lua`에서 사용한 SmartThings 표준 capability(`carbonDioxideMeasurement.carbonDioxide`, `dustSensor.fineDustLevel`, `veryFineDustSensor.veryFineDustLevel`)는 이 개발 환경에 SmartThings SDK가 없어 **정확한 capability/속성 이름을 실제로 검증하지 못했다**
+- 다음 작업 시 참고: 실제 SmartThings CLI로 드라이버를 설치한 뒤, 공기질 Device 타일에서 CO2/PM2.5/PM10 값이 정상적으로 표시되는지 확인할 것. capability 이름이 틀렸다면 SmartThings 개발자 문서의 정확한 capability id로 `commax-airquality.yml`과 `device_handler.lua`의 이벤트 emit 코드를 수정해야 함
 ```
 
 ## 9. 트러블슈팅

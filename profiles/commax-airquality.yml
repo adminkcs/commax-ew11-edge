@@ -1,0 +1,14 @@
+name: commax-airquality
+components:
+  - id: main
+    capabilities:
+      - id: carbonDioxideMeasurement
+        version: 1
+      - id: dustSensor
+        version: 1
+      - id: veryFineDustSensor
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: AirQualityDetector

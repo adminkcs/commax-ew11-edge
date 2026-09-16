@@ -24,6 +24,8 @@ assert(bcd.encode(25) == 0x25, "BCD encode 25 should be 0x25")
 assert(bcd.decode(0x25) == 25, "BCD decode 0x25 should be 25")
 assert(bcd.encode(5) == 0x05, "BCD encode 5 should be 0x05")
 assert(bcd.decode(0x05) == 5, "BCD decode 0x05 should be 5")
+assert(bcd.decode_word(0x13, 0x13) == 1313, "BCD decode_word(0x13,0x13) should be 1313")
+assert(bcd.decode_word(0x00, 0x01) == 1, "BCD decode_word(0x00,0x01) should be 1")
 print("[PASS] BCD Encode/Decode")
 
 -- 2. Light Command Packets (Ground truth from homenet2mqtt / commax.test.ts)
@@ -136,6 +138,34 @@ local res_old, err_old = protocol.parse_packet(old_open_guess_pkt)
 assert(res_old and res_old.device_type == "gas" and res_old.is_open == false,
   "Superseded homenet2mqtt open-byte (0x80) must now read as closed, not open")
 print("[PASS] Parse Gas Valve State (superseded 0x80 byte now correctly reads as CLOSED)")
+
+-- CO2 Sensor: F7 82 01 00 1A 13 13 BA
+-- CONFIRMED 2026-09-17 by real EW11 capture matched live against the
+-- wallpad display showing CO2=1313, then tracked live as it fell to
+-- 1235/1223/1221 with matching trailing bytes each time.
+local co2_pkt = hex_to_bin("F7 82 01 00 1A 13 13 BA")
+local res_co2, err_co2 = protocol.parse_packet(co2_pkt)
+assert(res_co2 and res_co2.device_type == "co2", "Parse CO2 sensor packet")
+assert(res_co2.ppm == 1313, "CO2 should be 1313 ppm")
+print("[PASS] Parse CO2 Sensor (1313 ppm, real-capture-confirmed)")
+
+-- PM2.5 Sensor: C8 31 01 13 13 00 01 21
+-- CONFIRMED 2026-09-17 matched live against the wallpad showing PM2.5=1.
+local pm25_pkt = hex_to_bin("C8 31 01 13 13 00 01 21")
+local res_pm25, err_pm25 = protocol.parse_packet(pm25_pkt)
+assert(res_pm25 and res_pm25.device_type == "pm25", "Parse PM2.5 sensor packet")
+assert(res_pm25.ug_m3 == 1, "PM2.5 should be 1 ug/m3")
+print("[PASS] Parse PM2.5 Sensor (1 ug/m3, real-capture-confirmed)")
+
+-- PM10 Sensor: C8 3F 01 13 13 00 01 2F
+-- CONFIRMED 2026-09-17 matched live against the wallpad showing PM10=1.
+-- Note: our unit's second byte is 0x3F, not the 0x39 in homenet2mqtt's
+-- haatz_air_quality_sensors.yaml - real capture overrides that doc value.
+local pm10_pkt = hex_to_bin("C8 3F 01 13 13 00 01 2F")
+local res_pm10, err_pm10 = protocol.parse_packet(pm10_pkt)
+assert(res_pm10 and res_pm10.device_type == "pm10", "Parse PM10 sensor packet")
+assert(res_pm10.ug_m3 == 1, "PM10 should be 1 ug/m3")
+print("[PASS] Parse PM10 Sensor (1 ug/m3, real-capture-confirmed)")
 
 -- Fan State ON, ID 1, Speed 2: F6 01 01 02 00 00 00 FA
 -- Header 0xF6 matches the (byte & 0xF1) == 0xF0 family used by the real

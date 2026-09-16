@@ -21,4 +21,11 @@ function bcd.decode(val)
   return (tens * 10) + ones
 end
 
+--- Decode two consecutive BCD bytes as a single 0..9999 number
+--- (each byte contributes two decimal digits, high byte first).
+--- e.g. decode_word(0x13, 0x13) -> 1313
+function bcd.decode_word(hi, lo)
+  return bcd.decode(hi) * 100 + bcd.decode(lo)
+end
+
 return bcd

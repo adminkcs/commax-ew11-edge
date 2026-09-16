@@ -33,6 +33,8 @@ function handler.handle_parsed_packet(driver, parsed)
     target_dni = string.format("commax:fan:%d", parsed.id)
   elseif parsed.device_type == "gas" then
     target_dni = "commax:gas:1"
+  elseif parsed.device_type == "co2" or parsed.device_type == "pm25" or parsed.device_type == "pm10" then
+    target_dni = "commax:airquality:1"
   end
 
   if not target_dni then return end
@@ -90,6 +92,14 @@ function handler.handle_parsed_packet(driver, parsed)
     else
       device:emit_event(capabilities.valve.valve.closed())
     end
+
+  -- 5. Air Quality Events (CO2 / PM2.5 / PM10) - read-only sensor, no commands
+  elseif parsed.device_type == "co2" then
+    device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide({ value = parsed.ppm, unit = "ppm" }))
+  elseif parsed.device_type == "pm10" then
+    device:emit_event(capabilities.dustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
+  elseif parsed.device_type == "pm25" then
+    device:emit_event(capabilities.veryFineDustSensor.veryFineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
   end
 end
 

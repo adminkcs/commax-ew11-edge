@@ -58,6 +58,13 @@ preferences:
     preferenceType: boolean
     definition:
       default: true
+  - name: enableAirQuality
+    title: "Enable Air Quality Sensor"
+    description: "Create CO2/PM2.5/PM10 sensor device (read-only) if available"
+    required: true
+    preferenceType: boolean
+    definition:
+      default: true
   - name: pollInterval
     title: "Heater Status Polling Interval (seconds)"
     description: "Interval to query heaters (0 to disable active query)"
