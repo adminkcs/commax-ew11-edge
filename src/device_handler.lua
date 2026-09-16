@@ -194,9 +194,9 @@ function handler.handle_refresh(driver, device, command)
   log.info(string.format("[Handler] Refresh requested for %s", dni))
   
   if dni:match("^commax:light:(%d+)$") then
-    -- NOTE: no confirmed active-query packet exists for lights (정보 불충분).
-    -- Light state is only updated passively from state broadcasts on the bus.
-    log.info("[Handler] Light active query is not supported (unconfirmed packet) - waiting for passive state broadcast")
+    -- Confirmed by real EW11 capture 2026-09-16 (see commax_protocol.lua).
+    local light_id = tonumber(dni:match("^commax:light:(%d+)$"))
+    safe_send(driver, protocol.build_light_query(light_id))
   elseif dni:match("^commax:thermostat:(%d+)$") then
     local thermo_id = tonumber(dni:match("^commax:thermostat:(%d+)$"))
     safe_send(driver, protocol.build_thermostat_query(thermo_id))

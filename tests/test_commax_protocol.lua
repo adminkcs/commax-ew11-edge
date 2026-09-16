@@ -36,6 +36,10 @@ assert_hex("31 01 00 00 00 00 00 32", light1_off, "Light 1 OFF")
 local light2_on = protocol.build_light_command(2, true)
 assert_hex("31 02 01 00 00 00 00 34", light2_on, "Light 2 ON")
 
+-- Light query: CONFIRMED 2026-09-16 by real EW11 capture ("30 01 00 00 00 00 00 31")
+local light1_query = protocol.build_light_query(1)
+assert_hex("30 01 00 00 00 00 00 31", light1_query, "Light 1 Query (real-capture-confirmed)")
+
 -- 3. Thermostat Command Packets
 local thermo1_heat = protocol.build_thermostat_power(1, true)
 assert_hex("04 01 04 81 00 00 00 8A", thermo1_heat, "Thermo 1 Heat (Power ON)")
@@ -104,19 +108,34 @@ assert(res_thermo.target_temperature == 25, "Target temperature 25C")
 assert(res_thermo.state == "heating", "Heating state active")
 print("[PASS] Parse Thermostat State (Heating, 22C -> 25C)")
 
--- Gas State CLOSED: 90 40 40 00 00 00 00 10
-local gas_state_pkt = hex_to_bin("90 40 40 00 00 00 00 10")
+-- Gas State CLOSED: 90 50 50 00 00 00 00 30
+-- CONFIRMED 2026-09-16 by real EW11 capture (tools/capture_ew11.ps1) -
+-- our home's wallpad broadcasts exactly this while the valve is closed.
+local gas_state_pkt = hex_to_bin("90 50 50 00 00 00 00 30")
 local res_gas, err_g = protocol.parse_packet(gas_state_pkt)
 assert(res_gas and res_gas.device_type == "gas", "Parse gas state")
 assert(res_gas.is_open == false, "Gas valve should be CLOSED")
-print("[PASS] Parse Gas Valve State (CLOSED)")
+print("[PASS] Parse Gas Valve State (CLOSED, real-capture-confirmed byte 0x50)")
 
--- Gas State OPEN: 90 80 80 00 00 00 00 90
-local gas_open_pkt = hex_to_bin("90 80 80 00 00 00 00 90")
+-- Gas State OPEN: 90 A0 A0 00 00 00 00 D0
+-- NOT directly observed on our bus (valve was never opened during
+-- capture) - taken from kimtc99/HAaddons, the same source that correctly
+-- predicted our real CLOSED byte above. See commax_protocol.lua GAS_OPEN
+-- comment; still flagged as 정보 불충분 in README until directly observed.
+local gas_open_pkt = hex_to_bin("90 A0 A0 00 00 00 00 D0")
 local res_gas_open, err_go = protocol.parse_packet(gas_open_pkt)
 assert(res_gas_open and res_gas_open.device_type == "gas", "Parse gas state (open)")
 assert(res_gas_open.is_open == true, "Gas valve should be OPEN")
-print("[PASS] Parse Gas Valve State (OPEN)")
+print("[PASS] Parse Gas Valve State (OPEN, unconfirmed byte 0xA0)")
+
+-- Old (superseded) homenet2mqtt-sourced gas bytes must now be treated as
+-- CLOSED under the corrected constants, proving we didn't just widen the
+-- "open" check - the old open-byte no longer matches.
+local old_open_guess_pkt = hex_to_bin("90 80 80 00 00 00 00 90")
+local res_old, err_old = protocol.parse_packet(old_open_guess_pkt)
+assert(res_old and res_old.device_type == "gas" and res_old.is_open == false,
+  "Superseded homenet2mqtt open-byte (0x80) must now read as closed, not open")
+print("[PASS] Parse Gas Valve State (superseded 0x80 byte now correctly reads as CLOSED)")
 
 -- Fan State ON, ID 1, Speed 2: F6 01 01 02 00 00 00 FA
 -- Header 0xF6 matches the (byte & 0xF1) == 0xF0 family used by the real

@@ -4,10 +4,14 @@ local protocol = {
   PACKET_LEN = 8,
   
   -- Header Definitions
-  -- NOTE: REQ_LIGHT (light active-query) packet is NOT confirmed in any
-  -- source we analyzed (homenet2mqtt gallery/commax). Lights are only
-  -- updated from passively-received state broadcasts (STATE_LIGHT/ACK_LIGHT).
+  -- REQ_LIGHT: confirmed 2026-09-16 by a real capture from our own EW11
+  -- (tools/capture_ew11.ps1) - passively observed on the bus as
+  -- "30 01 00 00 00 00 00 31", "30 02 ...", incrementing ID with an
+  -- all-zero payload, immediately followed by the matching B0 state reply.
+  -- Previously removed for lack of source evidence; real hardware confirms
+  -- the original guess was in fact correct.
   CMD_LIGHT        = 0x31,
+  REQ_LIGHT        = 0x30,
   STATE_LIGHT      = 0xB0,
   ACK_LIGHT        = 0xB1,
 
@@ -15,6 +19,11 @@ local protocol = {
   -- 0x80 / 0x81 / 0x83 are NOT headers - they are the power/mode byte at
   -- index 2 of the payload (off / heat-idle / heat-active respectively).
   -- Source: gallery/commax/heaters_new.yaml description table.
+  -- CONFIRMED 2026-09-16 by real EW11 capture: header 0x82 with byte1=0x80
+  -- ("82 80 02 27 05 00 00 30") and byte1=0x81 ("82 81 01 28 12 00 00 3E")
+  -- both observed exactly as coded here, alongside the matching 0x02 query
+  -- packet ("02 01/02/03 ..."). THERMO_HEATING (0x83, actively firing) was
+  -- not observed in this capture (heater was idle) - still unconfirmed.
   CMD_THERMO       = 0x04,
   REQ_THERMO       = 0x02,
   STATE_THERMO     = 0x82,
@@ -28,14 +37,30 @@ local protocol = {
   -- State broadcasts match the bit pattern (byte & 0xF1) == 0xF0, i.e. the
   -- header's high nibble is 0xF and bit0 is clear (covers 0xF0, 0xF6, ...).
   -- Command header is 0x78, ack header is 0xF8.
+  -- CONFIRMED 2026-09-16 by real EW11 capture: "F6 00 01 00 00 00 00 F7"
+  -- observed (header 0xF6 matches the mask, byte1=0x00 -> OFF, byte2=ID 1) -
+  -- matches this parsing exactly. Only the OFF state was observed; ON/speed
+  -- values were not captured (fan was idle).
   CMD_FAN          = 0x78,
   ACK_FAN          = 0xF8,
   STATE_FAN_MASK   = 0xF1,
   STATE_FAN_VALUE  = 0xF0,
 
+  -- Gas valve state bytes CORRECTED 2026-09-16 from a real EW11 capture:
+  -- our home's wallpad broadcasts "90 50 50 00 00 00 00 30" while closed -
+  -- i.e. status byte 0x50, NOT 0x40 as the homenet2mqtt source described.
+  -- This directly contradicts the reference repo for OUR unit; real
+  -- hardware evidence overrides it per the "don't guess" policy (real
+  -- capture beats every secondary source). The OPEN byte (0xA0) has not
+  -- been directly observed (valve was never opened during capture) - it is
+  -- taken from kimtc99/HAaddons, which is the same source that correctly
+  -- predicted our real CLOSED byte (0x50), raising confidence in its
+  -- paired OPEN value. Still flagged in README as not directly confirmed.
   CMD_GAS          = 0x11,
   STATE_GAS        = 0x90,
   ACK_GAS          = 0x91,
+  GAS_OPEN         = 0xA0,
+  GAS_CLOSED       = 0x50,
 }
 
 --- Calculate 8-bit sum checksum for bytes 1..7
@@ -90,6 +115,13 @@ end
 function protocol.build_light_command(id, is_on)
   local pwr = is_on and 0x01 or 0x00
   return protocol.build_packet(protocol.CMD_LIGHT, id, pwr, 0x00, 0x00, 0x00, 0x00)
+end
+
+--- Build Light Status Query
+--- Packet: [0x30, ID, 0x00, 0x00, 0x00, 0x00, 0x00, Checksum]
+--- Confirmed by real EW11 capture 2026-09-16 (see REQ_LIGHT comment above).
+function protocol.build_light_query(id)
+  return protocol.build_packet(protocol.REQ_LIGHT, id, 0x00, 0x00, 0x00, 0x00, 0x00)
 end
 
 --- Build Thermostat Power Command (Heat / Off)
@@ -266,9 +298,13 @@ function protocol.parse_packet(raw_bytes)
 
   -- 4. Gas Valve State (0x90) or ACK (0x91)
   -- Packet: [Head, Status, StatusRepeat, 0x00, 0x00, 0x00, 0x00, CS]
+  -- CLOSED (0x50) confirmed by real capture; OPEN (0xA0) not directly
+  -- observed - see the constant comments above. Regardless of which value
+  -- is right, is_open is fail-safe: anything other than exactly GAS_OPEN
+  -- is treated as closed, so an unrecognized byte never falsely reports open.
   elseif head == protocol.STATE_GAS or head == protocol.ACK_GAS then
     local status = b[2]
-    local is_open = (status == 0x80)
+    local is_open = (status == protocol.GAS_OPEN)
     return {
       device_type = "gas",
       id = 1,
