@@ -13,6 +13,13 @@
 .USAGE
   powershell -ExecutionPolicy Bypass -File tools\capture_ew11.ps1 -Ip 192.168.0.83 -Port 8899
 
+  Only VALID (checksum-passing) packets are written to the log file, to
+  keep it readable - noise/resync bytes still print to the console but are
+  not persisted. While it's running, type a short note (e.g. "light8 on")
+  and press Enter to drop a timestamped marker line into the log, right
+  before you flip a switch - that makes it easy to tell later which
+  packets around that timestamp correspond to which action.
+
 .NOTES
   - Read-only: this script only listens, it never sends anything to the bus.
   - Press Ctrl+C to stop.
@@ -21,7 +28,8 @@
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Ip,
-  [int]$Port = 8899
+  [int]$Port = 8899,
+  [string]$LogFile = "$PSScriptRoot\capture_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 )
 
 function Test-Checksum {
@@ -44,16 +52,40 @@ function Convert-BytesToHex {
 Write-Host "Connecting to $Ip`:$Port ..." -ForegroundColor Cyan
 $client = New-Object System.Net.Sockets.TcpClient
 $client.Connect($Ip, $Port)
-Write-Host "Connected. Listening for RS485 traffic (Ctrl+C to stop)..." -ForegroundColor Green
-Write-Host "Operate lights/heater/fan/gas now and watch the [VALID] lines below.`n"
+Write-Host "Connected. Logging valid packets to: $LogFile" -ForegroundColor Green
+Write-Host "Type a short note + Enter to drop a marker (e.g. 'light8 on'), then flip the switch." -ForegroundColor Yellow
+Write-Host "Ctrl+C to stop.`n"
+
+"# EW11 capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') against ${Ip}:${Port}" | Out-File -FilePath $LogFile -Encoding utf8
 
 $stream = $client.GetStream()
-$stream.ReadTimeout = 500
+$stream.ReadTimeout = 200
 $buffer = New-Object System.Collections.Generic.List[byte]
 $readBuf = New-Object byte[] 256
+$inputLine = New-Object System.Text.StringBuilder
 
 try {
   while ($true) {
+    # Non-blocking check for a typed marker note, so we don't have to stop
+    # capturing to record "what I just did".
+    while ([Console]::KeyAvailable) {
+      $key = [Console]::ReadKey($true)
+      if ($key.Key -eq "Enter") {
+        $note = $inputLine.ToString()
+        $inputLine.Clear() | Out-Null
+        if ($note.Trim().Length -gt 0) {
+          $ts = (Get-Date).ToString("HH:mm:ss.fff")
+          $line = "[$ts] ==== MARK: $note ===="
+          Write-Host $line -ForegroundColor Cyan
+          $line | Out-File -FilePath $LogFile -Append -Encoding utf8
+        }
+      } elseif ($key.Key -eq "Backspace") {
+        if ($inputLine.Length -gt 0) { $inputLine.Remove($inputLine.Length - 1, 1) | Out-Null }
+      } else {
+        $inputLine.Append($key.KeyChar) | Out-Null
+      }
+    }
+
     try {
       $n = $stream.Read($readBuf, 0, $readBuf.Length)
       if ($n -gt 0) {
@@ -69,11 +101,14 @@ try {
     while ($buffer.Count -ge 8) {
       $candidate = $buffer.GetRange(0, 8).ToArray()
       $ts = (Get-Date).ToString("HH:mm:ss.fff")
+      $hex = Convert-BytesToHex $candidate
       if (Test-Checksum $candidate) {
-        Write-Host "[$ts] [VALID]   $(Convert-BytesToHex $candidate)" -ForegroundColor Green
+        $line = "[$ts] [VALID] $hex"
+        Write-Host $line -ForegroundColor Green
+        $line | Out-File -FilePath $LogFile -Append -Encoding utf8
         $buffer.RemoveRange(0, 8)
       } else {
-        Write-Host "[$ts] [shift]   $(Convert-BytesToHex $candidate)" -ForegroundColor DarkGray
+        Write-Host "[$ts] [shift] $hex" -ForegroundColor DarkGray
         $buffer.RemoveAt(0)
       }
     }
@@ -81,5 +116,5 @@ try {
 } finally {
   $stream.Close()
   $client.Close()
-  Write-Host "`nDisconnected."
+  Write-Host "`nDisconnected. Log saved to: $LogFile"
 }
