@@ -29,14 +29,35 @@
 param(
   [Parameter(Mandatory = $true)][string]$Ip,
   [int]$Port = 8899,
-  [string]$LogFile = "$PSScriptRoot\capture_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+  [string]$LogFile = ""
 )
+
+# $PSScriptRoot can come back empty depending on how the script was
+# invoked (e.g. pasted into -Command instead of run via -File), which
+# previously caused the default log path to resolve to "\capture_....log"
+# - the root of the current drive, which needs admin rights and fails with
+# "Access is denied". Fall back to the current working directory instead.
+if ([string]::IsNullOrEmpty($LogFile)) {
+  $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+  $LogFile = Join-Path $scriptDir "capture_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+}
 
 function Test-Checksum {
   param([byte[]]$Bytes)
   $sum = 0
   for ($i = 0; $i -lt 7; $i++) { $sum = ($sum + $Bytes[$i]) -band 0xFF }
   return $sum -eq $Bytes[7]
+}
+
+function Write-LogLine {
+  # A single failed write (e.g. transient disk/permission issue) must not
+  # crash the whole capture - just warn once to the console and keep going.
+  param([string]$Line)
+  try {
+    $Line | Out-File -FilePath $LogFile -Append -Encoding utf8
+  } catch {
+    Write-Host "(log write failed: $($_.Exception.Message))" -ForegroundColor Red
+  }
 }
 
 function Convert-BytesToHex {
@@ -49,14 +70,21 @@ function Convert-BytesToHex {
   return ($Bytes | ForEach-Object { $_.ToString("X2") }) -join " "
 }
 
+try {
+  "# EW11 capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') against ${Ip}:${Port}" | Out-File -FilePath $LogFile -Encoding utf8
+} catch {
+  Write-Host "Could not create log file at '$LogFile': $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "Falling back to your Documents folder." -ForegroundColor Yellow
+  $LogFile = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "capture_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+  "# EW11 capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') against ${Ip}:${Port}" | Out-File -FilePath $LogFile -Encoding utf8
+}
+
 Write-Host "Connecting to $Ip`:$Port ..." -ForegroundColor Cyan
 $client = New-Object System.Net.Sockets.TcpClient
 $client.Connect($Ip, $Port)
 Write-Host "Connected. Logging valid packets to: $LogFile" -ForegroundColor Green
 Write-Host "Type a short note + Enter to drop a marker (e.g. 'light8 on'), then flip the switch." -ForegroundColor Yellow
 Write-Host "Ctrl+C to stop.`n"
-
-"# EW11 capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') against ${Ip}:${Port}" | Out-File -FilePath $LogFile -Encoding utf8
 
 $stream = $client.GetStream()
 $stream.ReadTimeout = 200
@@ -77,7 +105,7 @@ try {
           $ts = (Get-Date).ToString("HH:mm:ss.fff")
           $line = "[$ts] ==== MARK: $note ===="
           Write-Host $line -ForegroundColor Cyan
-          $line | Out-File -FilePath $LogFile -Append -Encoding utf8
+          Write-LogLine $line
         }
       } elseif ($key.Key -eq "Backspace") {
         if ($inputLine.Length -gt 0) { $inputLine.Remove($inputLine.Length - 1, 1) | Out-Null }
@@ -105,7 +133,7 @@ try {
       if (Test-Checksum $candidate) {
         $line = "[$ts] [VALID] $hex"
         Write-Host $line -ForegroundColor Green
-        $line | Out-File -FilePath $LogFile -Append -Encoding utf8
+        Write-LogLine $line
         $buffer.RemoveRange(0, 8)
       } else {
         Write-Host "[$ts] [shift] $hex" -ForegroundColor DarkGray
