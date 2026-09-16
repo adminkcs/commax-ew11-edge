@@ -63,6 +63,18 @@ assert_hex("78 01 02 01 00 00 00 7C", fan_speed1, "Fan 1 Speed 1 (commax.test.ts
 local gas_close = protocol.build_gas_close()
 assert_hex("11 01 80 00 00 00 00 92", gas_close, "Gas Valve Close")
 
+-- 5a. Outlet Command Packets
+-- CONFIRMED 2026-09-17 by real command/ack/state correlation: toggling
+-- outlet 1 OFF then ON produced exactly these bytes on the bus.
+local outlet1_off = protocol.build_outlet_command(1, false)
+assert_hex("7A 01 01 00 00 00 00 7C", outlet1_off, "Outlet 1 OFF (real-capture-confirmed)")
+
+local outlet1_on = protocol.build_outlet_command(1, true)
+assert_hex("7A 01 01 01 00 00 00 7D", outlet1_on, "Outlet 1 ON (real-capture-confirmed)")
+
+local outlet1_query = protocol.build_outlet_query(1)
+assert_hex("79 01 01 00 00 00 00 7B", outlet1_query, "Outlet 1 Query (real-capture-confirmed)")
+
 -- 5b. ACK Prefix Builders (used by ew11.lua's TX retry queue)
 local function assert_ack(expected, actual, desc)
   assert(#expected == #actual, desc .. " (length mismatch)")
@@ -81,6 +93,8 @@ assert_ack({0xF8, 0x04}, protocol.ack_fan_on(), "ACK Fan ON")
 assert_ack({0xF8, 0x00}, protocol.ack_fan_off(), "ACK Fan OFF")
 assert_ack({0xF8, 0x04}, protocol.ack_fan_speed(), "ACK Fan Speed")
 assert_ack({0x91, 0x88, 0x88}, protocol.ack_gas_close(), "ACK Gas Close")
+assert_ack({0xFA, 0x10, 0x01}, protocol.ack_outlet_command(1, false), "ACK Outlet 1 OFF")
+assert_ack({0xFA, 0x11, 0x01}, protocol.ack_outlet_command(1, true), "ACK Outlet 1 ON")
 
 -- 6. Packet Parsing Tests
 local function hex_to_bin(hex_str)
@@ -166,6 +180,27 @@ local res_pm10, err_pm10 = protocol.parse_packet(pm10_pkt)
 assert(res_pm10 and res_pm10.device_type == "pm10", "Parse PM10 sensor packet")
 assert(res_pm10.ug_m3 == 1, "PM10 should be 1 ug/m3")
 print("[PASS] Parse PM10 Sensor (1 ug/m3, real-capture-confirmed)")
+
+-- Outlet State: F9 10 01 10 00 00 00 1A (OFF) / F9 11 01 10 00 00 00 1B (ON)
+-- CONFIRMED 2026-09-17 by real command/ack/state correlation on our bus.
+local outlet_off_pkt = hex_to_bin("F9 10 01 10 00 00 00 1A")
+local res_outlet_off, err_outlet_off = protocol.parse_packet(outlet_off_pkt)
+assert(res_outlet_off and res_outlet_off.device_type == "outlet", "Parse outlet state")
+assert(res_outlet_off.id == 1 and res_outlet_off.is_on == false, "Outlet 1 state should be OFF")
+print("[PASS] Parse Outlet State (OFF, real-capture-confirmed)")
+
+local outlet_on_pkt = hex_to_bin("F9 11 01 10 00 00 00 1B")
+local res_outlet_on, err_outlet_on = protocol.parse_packet(outlet_on_pkt)
+assert(res_outlet_on and res_outlet_on.device_type == "outlet", "Parse outlet state")
+assert(res_outlet_on.id == 1 and res_outlet_on.is_on == true, "Outlet 1 state should be ON")
+print("[PASS] Parse Outlet State (ON, real-capture-confirmed)")
+
+-- Outlet ACK: FA 10 01 10 00 00 00 1B (OFF ack) / FA 11 01 10 00 00 00 1C (ON ack)
+local outlet_ack_off_pkt = hex_to_bin("FA 10 01 10 00 00 00 1B")
+local res_outlet_ack_off = protocol.parse_packet(outlet_ack_off_pkt)
+assert(res_outlet_ack_off and res_outlet_ack_off.device_type == "outlet" and res_outlet_ack_off.is_on == false,
+  "Outlet 1 ACK should parse as OFF")
+print("[PASS] Parse Outlet ACK (OFF, real-capture-confirmed)")
 
 -- Fan State ON, ID 1, Speed 2: F6 01 01 02 00 00 00 FA
 -- Header 0xF6 matches the (byte & 0xF1) == 0xF0 family used by the real

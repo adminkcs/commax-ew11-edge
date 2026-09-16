@@ -35,6 +35,8 @@ function handler.handle_parsed_packet(driver, parsed)
     target_dni = "commax:gas:1"
   elseif parsed.device_type == "co2" or parsed.device_type == "pm25" or parsed.device_type == "pm10" then
     target_dni = "commax:airquality:1"
+  elseif parsed.device_type == "outlet" then
+    target_dni = string.format("commax:outlet:%d", parsed.id)
   end
 
   if not target_dni then return end
@@ -100,6 +102,14 @@ function handler.handle_parsed_packet(driver, parsed)
     device:emit_event(capabilities.dustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
   elseif parsed.device_type == "pm25" then
     device:emit_event(capabilities.veryFineDustSensor.veryFineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
+
+  -- 6. Outlet Event
+  elseif parsed.device_type == "outlet" then
+    if parsed.is_on then
+      device:emit_event(capabilities.switch.switch.on())
+    else
+      device:emit_event(capabilities.switch.switch.off())
+    end
   end
 end
 
@@ -119,6 +129,10 @@ function handler.handle_switch_on(driver, device, command)
     local fan_id = tonumber(dni:match("^commax:fan:(%d+)$"))
     local packet = protocol.build_fan_power(fan_id, true)
     safe_send(driver, packet, protocol.ack_fan_on())
+  elseif dni:match("^commax:outlet:(%d+)$") then
+    local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
+    local packet = protocol.build_outlet_command(outlet_id, true)
+    safe_send(driver, packet, protocol.ack_outlet_command(outlet_id, true))
   end
 end
 
@@ -134,6 +148,10 @@ function handler.handle_switch_off(driver, device, command)
     local fan_id = tonumber(dni:match("^commax:fan:(%d+)$"))
     local packet = protocol.build_fan_power(fan_id, false)
     safe_send(driver, packet, protocol.ack_fan_off())
+  elseif dni:match("^commax:outlet:(%d+)$") then
+    local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
+    local packet = protocol.build_outlet_command(outlet_id, false)
+    safe_send(driver, packet, protocol.ack_outlet_command(outlet_id, false))
   end
 end
 
@@ -210,6 +228,10 @@ function handler.handle_refresh(driver, device, command)
   elseif dni:match("^commax:thermostat:(%d+)$") then
     local thermo_id = tonumber(dni:match("^commax:thermostat:(%d+)$"))
     safe_send(driver, protocol.build_thermostat_query(thermo_id))
+  elseif dni:match("^commax:outlet:(%d+)$") then
+    -- Confirmed by real EW11 capture 2026-09-17 (see commax_protocol.lua).
+    local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
+    safe_send(driver, protocol.build_outlet_query(outlet_id))
   elseif dni == "commax-bridge" then
     driver:poll_all_devices()
   end

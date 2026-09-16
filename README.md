@@ -127,6 +127,25 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 
 `commax-airquality` 프로필(SmartThings 표준 capability: `carbonDioxideMeasurement`, `dustSensor`(PM10 → `fineDustLevel`), `veryFineDustSensor`(PM2.5 → `veryFineDustLevel`))로 읽기 전용 센서 Device를 추가했다. 명령은 없다(원래 이 장치는 상태 브로드캐스트만 존재).
 
+### 3.5 콘센트 10개 — 명령/응답 실측으로 완전 확정 (2026-09-17)
+
+이전에 사용자가 갖고 있던 옛 패킷 기록(참고용, 정확성 불확실)을 근거로 삼지 않고, **콘센트 1~10번을 실제로 하나씩 켜고 끄면서 명령→ACK→상태 변화를 전부 직접 캡처**해서 확정했다.
+
+```
+명령 OFF: 7A ID 01 00 00 00 00 [cs]
+명령 ON:  7A ID 01 01 00 00 00 [cs]
+응답 OFF: FA 10 ID 10 00 00 00 [cs]
+응답 ON:  FA 11 ID 10 00 00 00 [cs]
+상태:     F9 (10=OFF/11=ON) ID 10 00 00 ?? [cs]
+조회:     79 ID 01 00 00 00 00 [cs]
+```
+
+콘센트 1번을 끄고 켰을 때, 명령 직후 정확히 예상한 ACK(`FA 10.../FA 11...`)와 이후 폴링 상태(`F9 10.../F9 11...`)가 그대로 바뀌는 것을 확인했다. 이어서 콘센트 1~10번(ID `01`~`0A`) 전부를 순서대로 껐다 켰을 때, 동일한 공식(`7A ID 01 PWR 00 00 00`, 체크섬은 ID가 늘어날수록 정확히 +1)이 10개 전부에서 그대로 성립하는 것을 확인했다 — ID 파라미터화된 하나의 프로토콜임이 실측으로 완전히 검증됨.
+
+`commax-outlet` 프로필(capability: `switch`, `refresh`)로 `commax:outlet:1~10` Device를 추가했다. Bridge Preference `outletCount`(기본 10, 최대 12)로 개수를 조정할 수 있다.
+
+> 참고: 사용자가 예전에 남겨둔 패킷 기록에는 콘센트 명령 헤더가 `79`로 (실측 결과 `79`는 조회 헤더, 실제 명령은 `7A`), 난방 명령 헤더가 `A0`으로 (실측 결과 `A0`은 콘센트/조명차단기 계열의 다른 장치, 난방 명령은 기존에 이미 확정된 `04`) 기록되어 있었다 — 옛 기록과 실측이 다른 경우 실측을 신뢰한다는 원칙을 여기서도 재확인했다.
+
 ## 4. SmartThings Device / Capability 설계
 
 | Device (profile) | Capability | 처리 Handler |
@@ -137,6 +156,7 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 | `commax-fan` | switch, fanSpeed, refresh | `handle_switch_on/off`, `handle_fan_speed` |
 | `commax-gas` | valve, refresh | `handle_valve_close` (open은 항상 차단) |
 | `commax-airquality` | carbonDioxideMeasurement, dustSensor, veryFineDustSensor, refresh | 명령 없음(읽기 전용, `handle_parsed_packet`만) |
+| `commax-outlet` | switch, refresh | `handle_switch_on/off` |
 
 데이터 흐름: `SmartThings Capability → device_handler.lua → commax_protocol.lua (패킷 생성) → ew11.lua (TCP 송신)`, 수신은 `ew11.lua (TCP 수신/프레이밍) → commax_protocol.lua (파싱) → device_handler.lua (Capability 이벤트 emit)`.
 
@@ -151,7 +171,8 @@ commax-ew11-edge/
 │   ├── commax-thermostat.yml
 │   ├── commax-fan.yml
 │   ├── commax-gas.yml
-│   └── commax-airquality.yml
+│   ├── commax-airquality.yml
+│   └── commax-outlet.yml
 ├── src/
 │   ├── init.lua              # 드라이버 라이프사이클, 자식기기 생성, 캡ability 라우팅
 │   ├── device_handler.lua    # Capability ↔ 프로토콜 연결
@@ -176,6 +197,7 @@ commax-ew11-edge/
 | EW11 Port | `8899` | EW11 웹 설정에서 지정한 TCP 포트와 일치해야 함 |
 | Number of Lights | 4 | 실제 조명 개수(1~9)로 설정 |
 | Number of Thermostats | 4 | 실제 난방 구역 수(0~9) |
+| Number of Outlets | 10 | 실제 콘센트 개수(0~12), 2026-09-17 10개 전부 실측 확정 |
 | Enable Ventilation Fan | true | 참고 저장소 기준 구현(3절 주의사항 참고) |
 | Enable Gas Valve | true | 상태조회 + 닫기만 |
 | Enable Air Quality Sensor | true | CO2/PM2.5/PM10 (읽기 전용) |

@@ -81,6 +81,26 @@ local protocol = {
   DUST_PM25        = 0x31,
   DUST_PM10        = 0x3F,
   DUST_SUB2        = 0x01,
+
+  -- Outlet (콘센트): CONFIRMED 2026-09-17 by real command/ack/state
+  -- correlation on our own bus. Toggling outlet 1 produced, in order:
+  --   command OFF: "7A 01 01 00 00 00 00 7C"
+  --   ack     OFF: "FA 10 01 10 00 00 00 1B"
+  --   command ON:  "7A 01 01 01 00 00 00 7D"
+  --   ack     ON:  "FA 11 01 10 00 00 00 1C"
+  -- and the passive state polling (query header 0x79, ID, attr 0x01/0x02)
+  -- immediately reflected the same change: "F9 10 01 10..." (off) /
+  -- "F9 11 01 10..." (on) - i.e. STATE/ACK byte1 0x10=OFF, 0x11=ON, byte2=ID.
+  -- The 4th payload byte in the query/state pair (0x01/0x02 in the query,
+  -- 0x10/0x20 in the reply) selects which attribute is being read; only
+  -- attr 0x01/0x10 (power state) is used here - the meaning of attr
+  -- 0x02/0x20 (possibly power consumption) is not confirmed and unused.
+  CMD_OUTLET       = 0x7A,
+  ACK_OUTLET       = 0xFA,
+  REQ_OUTLET       = 0x79,
+  STATE_OUTLET     = 0xF9,
+  OUTLET_ON        = 0x11,
+  OUTLET_OFF       = 0x10,
 }
 
 --- Calculate 8-bit sum checksum for bytes 1..7
@@ -185,6 +205,20 @@ function protocol.build_gas_close()
   return protocol.build_packet(protocol.CMD_GAS, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00)
 end
 
+--- Build Outlet Command (ON / OFF)
+--- Packet: [0x7A, ID, 0x01, (ON=1, OFF=0), 0x00, 0x00, 0x00, Checksum]
+--- CONFIRMED 2026-09-17 by real capture (see CMD_OUTLET comment above).
+function protocol.build_outlet_command(id, is_on)
+  local pwr = is_on and 0x01 or 0x00
+  return protocol.build_packet(protocol.CMD_OUTLET, id, 0x01, pwr, 0x00, 0x00, 0x00)
+end
+
+--- Build Outlet Status Query
+--- Packet: [0x79, ID, 0x01, 0x00, 0x00, 0x00, 0x00, Checksum]
+function protocol.build_outlet_query(id)
+  return protocol.build_packet(protocol.REQ_OUTLET, id, 0x01, 0x00, 0x00, 0x00, 0x00)
+end
+
 -- =========================================================================
 -- ACK Prefix Builders
 -- =========================================================================
@@ -232,6 +266,13 @@ end
 --- ack: [0x91, 0x88, 0x88] - gas_valve.yaml command_close
 function protocol.ack_gas_close()
   return { protocol.ACK_GAS, 0x88, 0x88 }
+end
+
+--- ack: [0xFA, 0x11, ID] (ON) / [0xFA, 0x10, ID] (OFF)
+--- CONFIRMED 2026-09-17 by real capture (see CMD_OUTLET comment above).
+function protocol.ack_outlet_command(id, is_on)
+  local ack_pwr = is_on and protocol.OUTLET_ON or protocol.OUTLET_OFF
+  return { protocol.ACK_OUTLET, ack_pwr, id }
 end
 
 -- =========================================================================
@@ -302,7 +343,11 @@ function protocol.parse_packet(raw_bytes)
   -- Packet: [Head, Power, ID, Speed, 0x00, 0x00, 0x00, CS]
   -- Source: gallery/commax/fan_new.yaml entities.fan (actual match/mask logic,
   -- not the inconsistent description-table comment in the same file)
-  elseif (head & protocol.STATE_FAN_MASK) == protocol.STATE_FAN_VALUE or head == protocol.ACK_FAN then
+  -- NOTE: the outlet ACK header (0xFA) also happens to satisfy this bit
+  -- mask (0xFA & 0xF1 == 0xF0) - explicitly excluded here since outlet
+  -- state/ack (0xF9/0xFA) are confirmed, exact, unrelated headers.
+  elseif (head ~= protocol.STATE_OUTLET and head ~= protocol.ACK_OUTLET)
+      and ((head & protocol.STATE_FAN_MASK) == protocol.STATE_FAN_VALUE or head == protocol.ACK_FAN) then
     local pwr_byte = b[2]
     local fan_id = b[3]
     local speed = b[4]
@@ -353,6 +398,18 @@ function protocol.parse_packet(raw_bytes)
       device_type = (b[2] == protocol.DUST_PM25) and "pm25" or "pm10",
       id = 1,
       ug_m3 = bcd.decode_word(b[6], b[7]),
+      raw = raw_bytes
+    }
+
+  -- 7. Outlet State (0xF9) or ACK (0xFA)
+  -- Packet: [Head, Power(0x10=OFF/0x11=ON), ID, Attr, 0x00, 0x00, ?, CS]
+  -- CONFIRMED 2026-09-17 by real capture (see CMD_OUTLET comment above).
+  elseif head == protocol.STATE_OUTLET or head == protocol.ACK_OUTLET then
+    local is_on = (b[2] == protocol.OUTLET_ON)
+    return {
+      device_type = "outlet",
+      id = b[3],
+      is_on = is_on,
       raw = raw_bytes
     }
   end
