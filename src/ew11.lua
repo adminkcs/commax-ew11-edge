@@ -138,10 +138,27 @@ function EW11:_write(raw_packet)
   return true
 end
 
+--- RS485 is half-duplex and shared with the wallpad's own periodic status
+--- broadcasts - writing while the bus just carried traffic risks colliding
+--- with it. Cross-checked against kimtc99/HAaddons (CommaxWallpadBySaram
+--- main.py), which withholds sends for 100ms after the last received byte
+--- for the same reason; we apply the same idle-bus guard here.
+local BUS_IDLE_GUARD = 0.1
+
+function EW11:_bus_busy()
+  return self.last_rx_time ~= nil and (socket.gettime() - self.last_rx_time) < BUS_IDLE_GUARD
+end
+
 --- One iteration of the TX queue: separated out so _tx_queue_loop can wrap
 --- it in pcall without an error inside ever killing the whole coroutine
 --- (which would silently stop ALL future commands from being sent).
 function EW11:_tx_queue_tick()
+  if self:_bus_busy() then
+    -- Something was just received on the bus - let it settle before we
+    -- transmit, rather than risk colliding with in-flight RS485 traffic.
+    return
+  end
+
   if self.pending then
     local elapsed = socket.gettime() - self.pending.sent_at
     if elapsed >= self.tx_timeout then

@@ -10,6 +10,7 @@
 package.path = "mocks/?.lua;mocks/?/init.lua;" .. package.path
 
 local EW11 = require("ew11")
+local socket = require("cosock.socket")
 
 local function hex_to_bin(hex_str)
   local clean = hex_str:gsub("%s+", "")
@@ -108,6 +109,21 @@ do
   ew11:_process_buffer() -- shifts byte-by-byte; buffer never finds a valid frame
   assert(#ew11.buffer < 8, "_process_buffer should have consumed all bytes down to <8 (no valid frame ever found)")
   print("[PASS] Buffer with no valid frame is fully drained by byte-shift resync, not stuck growing")
+end
+
+-- 6. Bus idle guard: TX must be withheld for a short window after the last
+-- RX, to avoid colliding with in-flight RS485 traffic (cross-checked
+-- against kimtc99/HAaddons's 100ms post-RX send guard).
+do
+  local ew11 = EW11.new({ call_with_delay = function() end }, "127.0.0.1", 8899, function() end)
+  assert(ew11:_bus_busy() == false, "Bus must read as idle when nothing has been received yet")
+
+  ew11.last_rx_time = socket.gettime()
+  assert(ew11:_bus_busy() == true, "Bus must read as busy immediately after a receive")
+
+  ew11.last_rx_time = socket.gettime() - 1.0 -- 1s ago, well past the 100ms guard
+  assert(ew11:_bus_busy() == false, "Bus must read as idle once the guard window has elapsed")
+  print("[PASS] Bus idle guard: TX is withheld right after RX, allowed again once idle")
 end
 
 print("=== All EW11 Buffer/Framing Tests Passed Successfully! ===")
