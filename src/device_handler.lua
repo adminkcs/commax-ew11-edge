@@ -217,6 +217,20 @@ function handler.handle_valve_open(driver, device, command)
   device:emit_event(capabilities.valve.valve.closed())
 end
 
+--- Elevator down-call is a momentary button. CONFIRMED 2026-09-17 by real
+--- capture: the physical trigger (a separate RS485-to-Matter bridge on the
+--- same bus) sends the exact same command packet TWICE, ~12ms apart, each
+--- separately ACKed, for a single logical call - not once. Enqueue it
+--- twice here to match that observed real-world behavior rather than
+--- guessing that a single send is sufficient.
+function handler.handle_elevator_call_down(driver, device, command)
+  log.info("[Handler] Elevator down-call requested")
+  local packet = protocol.build_elevator_call_down()
+  local ack = protocol.ack_elevator_call_down()
+  safe_send(driver, packet, ack)
+  safe_send(driver, packet, ack)
+end
+
 function handler.handle_refresh(driver, device, command)
   local dni = device.device_network_id
   log.info(string.format("[Handler] Refresh requested for %s", dni))

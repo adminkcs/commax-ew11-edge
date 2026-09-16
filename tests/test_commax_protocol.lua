@@ -75,6 +75,12 @@ assert_hex("7A 01 01 01 00 00 00 7D", outlet1_on, "Outlet 1 ON (real-capture-con
 local outlet1_query = protocol.build_outlet_query(1)
 assert_hex("79 01 01 00 00 00 00 7B", outlet1_query, "Outlet 1 Query (real-capture-confirmed)")
 
+-- 5c. Elevator Down-Call Command
+-- CONFIRMED 2026-09-17 by real capture while calling the elevator down
+-- via a separate RS485-to-Matter bridge sharing our bus.
+local elevator_call = protocol.build_elevator_call_down()
+assert_hex("22 01 40 07 00 00 00 6A", elevator_call, "Elevator Down-Call (real-capture-confirmed)")
+
 -- 5b. ACK Prefix Builders (used by ew11.lua's TX retry queue)
 local function assert_ack(expected, actual, desc)
   assert(#expected == #actual, desc .. " (length mismatch)")
@@ -95,6 +101,7 @@ assert_ack({0xF8, 0x04}, protocol.ack_fan_speed(), "ACK Fan Speed")
 assert_ack({0x91, 0x88, 0x88}, protocol.ack_gas_close(), "ACK Gas Close")
 assert_ack({0xFA, 0x10, 0x01}, protocol.ack_outlet_command(1, false), "ACK Outlet 1 OFF")
 assert_ack({0xFA, 0x11, 0x01}, protocol.ack_outlet_command(1, true), "ACK Outlet 1 ON")
+assert_ack({0xA2, 0x01, 0x01}, protocol.ack_elevator_call_down(), "ACK Elevator Down-Call")
 
 -- 6. Packet Parsing Tests
 local function hex_to_bin(hex_str)
@@ -201,6 +208,15 @@ local res_outlet_ack_off = protocol.parse_packet(outlet_ack_off_pkt)
 assert(res_outlet_ack_off and res_outlet_ack_off.device_type == "outlet" and res_outlet_ack_off.is_on == false,
   "Outlet 1 ACK should parse as OFF")
 print("[PASS] Parse Outlet ACK (OFF, real-capture-confirmed)")
+
+-- Elevator Down-Call ACK: A2 01 01 00 00 00 00 A4
+-- Recognized only so ew11.lua's TX retry queue can detect it - not mapped
+-- to any SmartThings device event (momentary, no persistent state).
+local elevator_ack_pkt = hex_to_bin("A2 01 01 00 00 00 00 A4")
+local res_elevator_ack = protocol.parse_packet(elevator_ack_pkt)
+assert(res_elevator_ack and res_elevator_ack.device_type == "elevator_call_ack",
+  "Parse elevator down-call ACK")
+print("[PASS] Parse Elevator Down-Call ACK (real-capture-confirmed)")
 
 -- Fan State ON, ID 1, Speed 2: F6 01 01 02 00 00 00 FA
 -- Header 0xF6 matches the (byte & 0xF1) == 0xF0 family used by the real

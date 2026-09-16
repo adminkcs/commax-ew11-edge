@@ -41,6 +41,7 @@ function commax_driver:sync_child_devices(bridge_device)
   local enable_fan = (prefs.enableFan ~= false)
   local enable_gas = (prefs.enableGas ~= false)
   local enable_air_quality = (prefs.enableAirQuality ~= false)
+  local enable_elevator = (prefs.enableElevator ~= false)
 
   -- 1. Create Lights
   for i = 1, light_count do
@@ -126,6 +127,21 @@ function commax_driver:sync_child_devices(bridge_device)
         type = "EDGE_CHILD",
         label = "코맥스 공기질 센서",
         profile = "commax-airquality",
+        parent_device_id = bridge_device.id,
+        device_network_id = dni
+      })
+    end
+  end
+
+  -- 7. Create Elevator Down-Call button (momentary, no up-call/status)
+  if enable_elevator then
+    local dni = "commax:elevator:1"
+    if not self:get_device_by_dni(dni) then
+      log.info("[Init] Creating child elevator down-call device")
+      safe_create_device(self, {
+        type = "EDGE_CHILD",
+        label = "코맥스 엘리베이터 하강호출",
+        profile = "commax-elevator",
         parent_device_id = bridge_device.id,
         device_network_id = dni
       })
@@ -283,6 +299,9 @@ local driver = Driver("commax-ew11", {
     },
     [capabilities.refresh.ID] = {
       [capabilities.refresh.commands.refresh.NAME] = handler.handle_refresh,
+    },
+    [capabilities.momentary.ID] = {
+      [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call_down,
     }
   }
 })

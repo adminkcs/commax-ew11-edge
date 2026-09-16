@@ -146,6 +146,21 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 
 > 참고: 사용자가 예전에 남겨둔 패킷 기록에는 콘센트 명령 헤더가 `79`로 (실측 결과 `79`는 조회 헤더, 실제 명령은 `7A`), 난방 명령 헤더가 `A0`으로 (실측 결과 `A0`은 콘센트/조명차단기 계열의 다른 장치, 난방 명령은 기존에 이미 확정된 `04`) 기록되어 있었다 — 옛 기록과 실측이 다른 경우 실측을 신뢰한다는 원칙을 여기서도 재확인했다.
 
+### 3.6 엘리베이터 하강 호출 — 실측 확정 및 추가 (2026-09-17)
+
+월패드 자체의 호출 버튼은 이 RS485 버스에 아무 패킷도 남기지 않았다(다른 경로로 통신하는 것으로 추정). 반면 사용자가 별도로 보유한 "브릿지허브"(RS485↔Matter 변환 기기)로 하강 호출을 실행했을 때는 이 버스에도 명령이 그대로 실렸다 — 우리 EW11이 같은 버스를 듣고 있으므로 관측 가능했다.
+
+```
+명령: 22 01 40 07 00 00 00 6A
+응답: A2 01 01 00 00 00 00 A4
+```
+
+**중요한 실측 디테일**: 버튼을 한 번 눌러도 이 명령이 **정확히 2번, 약 12ms 간격으로, 각각 개별 ACK를 받으며** 전송되는 것을 반복 확인했다(단발 호출 테스트로 재현). 그래서 이 드라이버도 추측 없이 실측 그대로 **2번 전송**하도록 구현했다(`handler.handle_elevator_call_down`이 `safe_send`를 두 번 호출).
+
+호출 직후 `23 01 01 04 07 00 00 30`(상태) / `A3 01 01 00 00 00 00 A5`가 도착 여부와 무관하게 계속(약 1초 간격) 반복 관측됐는데, 이는 실시간 층수가 아니라 고정 상태값/폴링으로 보여 파싱하지 않았다(파싱해도 의미를 알 수 없는 값을 SmartThings에 노출하지 않기 위함).
+
+`commax-elevator` 프로필(capability: `momentary`)로 `commax:elevator:1` Device를 추가했다. 버튼을 누르면(`push` 명령) 하강 호출 명령을 2번 전송한다. **상승(위) 호출은 구현하지 않았다** — 8절 "정보 불충분" 참고. Bridge Preference `enableElevator`(기본 true)로 이 Device 생성 여부를 조정할 수 있다.
+
 ## 4. SmartThings Device / Capability 설계
 
 | Device (profile) | Capability | 처리 Handler |
@@ -157,6 +172,7 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 | `commax-gas` | valve, refresh | `handle_valve_close` (open은 항상 차단) |
 | `commax-airquality` | carbonDioxideMeasurement, dustSensor, veryFineDustSensor, refresh | 명령 없음(읽기 전용, `handle_parsed_packet`만) |
 | `commax-outlet` | switch, refresh | `handle_switch_on/off` |
+| `commax-elevator` | momentary | `handle_elevator_call_down` (하강만, 2회 전송) |
 
 데이터 흐름: `SmartThings Capability → device_handler.lua → commax_protocol.lua (패킷 생성) → ew11.lua (TCP 송신)`, 수신은 `ew11.lua (TCP 수신/프레이밍) → commax_protocol.lua (파싱) → device_handler.lua (Capability 이벤트 emit)`.
 
@@ -172,7 +188,8 @@ commax-ew11-edge/
 │   ├── commax-fan.yml
 │   ├── commax-gas.yml
 │   ├── commax-airquality.yml
-│   └── commax-outlet.yml
+│   ├── commax-outlet.yml
+│   └── commax-elevator.yml
 ├── src/
 │   ├── init.lua              # 드라이버 라이프사이클, 자식기기 생성, 캡ability 라우팅
 │   ├── device_handler.lua    # Capability ↔ 프로토콜 연결
@@ -198,6 +215,7 @@ commax-ew11-edge/
 | Number of Lights | 4 | 실제 조명 개수(1~9)로 설정 |
 | Number of Thermostats | 4 | 실제 난방 구역 수(0~9) |
 | Number of Outlets | 10 | 실제 콘센트 개수(0~12), 2026-09-17 10개 전부 실측 확정 |
+| Enable Elevator Down-Call | true | 하강 호출 버튼(momentary), 상승은 미구현 |
 | Enable Ventilation Fan | true | 참고 저장소 기준 구현(3절 주의사항 참고) |
 | Enable Gas Valve | true | 상태조회 + 닫기만 |
 | Enable Air Quality Sensor | true | CO2/PM2.5/PM10 (읽기 전용) |
@@ -239,11 +257,11 @@ lua tests/test_commax_protocol.lua
 - 현재 확인된 정보: 참고 저장소에 command_open 자체가 정의되어 있지 않음
 - 이 드라이버의 처리: valve open 명령은 항상 차단하고 closed 상태로 되돌림 (handle_valve_open)
 
-정보 불충분 — 엘리베이터 호출 패킷 (2026-09-17 부분 실측, 미구현)
-- 현재 확인된 정보: 월패드 자체 호출 버튼을 눌렀을 때는 이 RS485 버스에 아무 패킷도 나타나지 않음(월패드가 직접 다른 경로로 엘리베이터와 통신하는 것으로 추정). 반면 사용자가 별도로 갖고 있는 "브릿지허브"(RS485→Matter 변환 기기)에서 하강(아래) 호출을 실행했을 때는 이 버스에서 `22 01 40 07 00 00 00 6A`(명령) / `A2 01 01 00 00 00 00 A4`(응답)이 확인됨. 이후 `23 01 01 04 07 00 00 30`(상태) / `A3 01 01 00 00 00 00 A5`가 도착 여부와 무관하게 계속(약 1초 간격) 반복 관측됨 — 실시간 층수가 아니라 고정 상태값/폴링으로 보임
-- 상승(위) 호출 패킷은 확인 못함: 브릿지허브 앱에 위 호출 기능 자체가 없어서 테스트 불가(물리적으로는 존재하나 앱에서 지원 안 함)
-- 이 드라이버의 처리: 구현하지 않음 — 바이트 `40`/`07`의 정확한 의미(방향/층수/고정값)가 불확실하고, 사용자가 이미 브릿지허브의 Matter 연동으로 제어 중이라 SmartThings에 추가할 필요성도 낮다고 판단(사용자 확인)
-- 다음 작업 시 참고: 위 호출 기능이 있는 다른 방법(월패드 등)으로 실측하게 되면 `40`/`07` 값 변화를 대조해서 방향 구분 로직을 확정할 것
+정보 불충분 — 엘리베이터 상승(위) 호출
+- 2026-09-17 하강 호출은 완전히 실측 확정되어 `commax-elevator` Device(momentary)로 구현됨 — 아래 3.6절 참고
+- 상승 호출 패킷은 확인 못함: 브릿지허브 앱에 위 호출 기능 자체가 없어서 테스트 불가(물리적으로는 존재하나 앱에서 지원 안 함)
+- 이 드라이버의 처리: 구현하지 않음(하강만 지원). 하강 명령의 byte3/byte4(`40`/`07`)가 방향을 나타내는 값인지, 다른 의미인지도 불확실하므로 그 값을 바꿔서 "상승"을 임의로 만들어내지 않음
+- 다음 작업 시 참고: 상승 호출 기능이 있는 다른 방법(월패드 등)으로 실측하게 되면 `40`/`07` 값 변화를 대조해서 방향 구분 로직을 확정할 것
 
 정보 불충분 — 조명 상태 능동 조회(query) 패킷
 - 현재 확인된 정보: 조명에 대한 query/request 패킷은 참고 저장소에서 발견되지 않음 (난방만 heaters_request.yaml 존재)

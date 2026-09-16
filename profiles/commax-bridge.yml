@@ -74,6 +74,13 @@ preferences:
     preferenceType: boolean
     definition:
       default: true
+  - name: enableElevator
+    title: "Enable Elevator Down-Call"
+    description: "Create a momentary button device that calls the elevator down (only the down-call packet is confirmed; there is no up-call or status)"
+    required: true
+    preferenceType: boolean
+    definition:
+      default: true
   - name: pollInterval
     title: "Heater Status Polling Interval (seconds)"
     description: "Interval to query heaters (0 to disable active query)"

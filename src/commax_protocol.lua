@@ -101,6 +101,19 @@ local protocol = {
   STATE_OUTLET     = 0xF9,
   OUTLET_ON        = 0x11,
   OUTLET_OFF       = 0x10,
+
+  -- Elevator call (하강 호출만 확인): CONFIRMED 2026-09-17 by real capture
+  -- while calling the elevator down via a separate RS485-to-Matter bridge
+  -- device sharing our bus: command "22 01 40 07 00 00 00 6A", ack
+  -- "A2 01 01 00 00 00 00 A4". This is a one-shot button-press command,
+  -- not a stateful on/off - there is no persistent "elevator state" to
+  -- read back (the follow-up "23/A3" status pair repeats regardless of
+  -- call/arrival and its meaning is unconfirmed, so it is NOT parsed).
+  -- Up-call is NOT implemented - untested (the bridge device used to
+  -- confirm this had no up-call option in its own app), so its payload
+  -- bytes are unknown and must not be guessed.
+  CMD_ELEVATOR_CALL_DOWN = { 0x22, 0x01, 0x40, 0x07, 0x00, 0x00, 0x00 },
+  ACK_ELEVATOR_CALL_DOWN = { 0xA2, 0x01, 0x01 },
 }
 
 --- Calculate 8-bit sum checksum for bytes 1..7
@@ -219,6 +232,14 @@ function protocol.build_outlet_query(id)
   return protocol.build_packet(protocol.REQ_OUTLET, id, 0x01, 0x00, 0x00, 0x00, 0x00)
 end
 
+--- Build Elevator Down-Call Command
+--- Packet: [0x22, 0x01, 0x40, 0x07, 0x00, 0x00, 0x00, Checksum]
+--- CONFIRMED 2026-09-17 by real capture (see CMD_ELEVATOR_CALL_DOWN comment above).
+function protocol.build_elevator_call_down()
+  local p = protocol.CMD_ELEVATOR_CALL_DOWN
+  return protocol.build_packet(p[1], p[2], p[3], p[4], p[5], p[6], p[7])
+end
+
 -- =========================================================================
 -- ACK Prefix Builders
 -- =========================================================================
@@ -273,6 +294,12 @@ end
 function protocol.ack_outlet_command(id, is_on)
   local ack_pwr = is_on and protocol.OUTLET_ON or protocol.OUTLET_OFF
   return { protocol.ACK_OUTLET, ack_pwr, id }
+end
+
+--- ack: [0xA2, 0x01, 0x01] - CONFIRMED 2026-09-17 by real capture.
+function protocol.ack_elevator_call_down()
+  local a = protocol.ACK_ELEVATOR_CALL_DOWN
+  return { a[1], a[2], a[3] }
 end
 
 -- =========================================================================
@@ -410,6 +437,17 @@ function protocol.parse_packet(raw_bytes)
       device_type = "outlet",
       id = b[3],
       is_on = is_on,
+      raw = raw_bytes
+    }
+
+  -- 8. Elevator Down-Call ACK (0xA2 0x01 0x01) - no persistent state exists
+  -- for this device (momentary call only), so this only exists to let
+  -- ew11.lua's TX queue recognize the ACK and stop retrying; it is not
+  -- mapped to any SmartThings device event.
+  elseif head == protocol.ACK_ELEVATOR_CALL_DOWN[1] and b[2] == protocol.ACK_ELEVATOR_CALL_DOWN[2]
+      and b[3] == protocol.ACK_ELEVATOR_CALL_DOWN[3] then
+    return {
+      device_type = "elevator_call_ack",
       raw = raw_bytes
     }
   end
