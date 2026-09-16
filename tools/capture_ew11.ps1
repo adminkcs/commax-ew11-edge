@@ -91,12 +91,20 @@ $stream.ReadTimeout = 200
 $buffer = New-Object System.Collections.Generic.List[byte]
 $readBuf = New-Object byte[] 256
 $inputLine = New-Object System.Text.StringBuilder
+# [Console]::KeyAvailable throws when there is no real console (input
+# redirected from a file/pipe, or run non-interactively) - detect that
+# once up front instead of crashing the whole capture loop on first use.
+$consoleAvailable = $true
+try { [void][Console]::KeyAvailable } catch { $consoleAvailable = $false }
+if (-not $consoleAvailable) {
+  Write-Host "(no interactive console detected - marker notes disabled, capture continues)" -ForegroundColor DarkYellow
+}
 
 try {
   while ($true) {
     # Non-blocking check for a typed marker note, so we don't have to stop
     # capturing to record "what I just did".
-    while ([Console]::KeyAvailable) {
+    while ($consoleAvailable -and [Console]::KeyAvailable) {
       $key = [Console]::ReadKey($true)
       if ($key.Key -eq "Enter") {
         $note = $inputLine.ToString()
