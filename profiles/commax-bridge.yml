@@ -5,7 +5,7 @@ components:
       - id: refresh
         version: 1
     categories:
-      - name: Hub
+      - name: Bridges
 preferences:
   - name: ew11Ip
     title: "EW11 IP Address"

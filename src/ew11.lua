@@ -247,8 +247,13 @@ function EW11:_connection_tick()
     -- Reading loop: read up to 256 bytes at a time (non-blocking under
     -- cosock's coroutine scheduler). "*a" would block until the peer
     -- closes the connection, which never happens on a live EW11 stream.
-    self.sock:settimeout(0.1)
-    local chunk, err, partial = self.sock:receive(256)
+    -- Capture self.sock into a local first, same as _write: update_config()
+    -- can nil out self.sock from another coroutine at any yield point
+    -- (settimeout/receive both yield), so re-reading self.sock between the
+    -- two calls below could hand us nil and raise mid-tick.
+    local sock = self.sock
+    sock:settimeout(0.1)
+    local chunk, err, partial = sock:receive(256)
     chunk = chunk or partial
     if chunk and #chunk > 0 then
       -- rx_timeout: if it has been too long since the last chunk, any
@@ -276,7 +281,7 @@ function EW11:_connection_tick()
       self:_process_buffer()
     elseif err == "closed" then
       log.warn("[EW11] Connection closed by peer. Reconnecting...")
-      self.sock:close()
+      sock:close()
       self.sock = nil
     else
       -- Timeout (no data yet) - yield briefly and retry

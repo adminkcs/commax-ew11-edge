@@ -292,6 +292,8 @@ commax-ew11-edge/
 1. EW11 웹 콘솔 접속 → Serial: 9600 / 8 / None / 1 로 설정
 2. Communication: TCP Server 모드, 원하는 Local Port 지정 후 저장·재부팅
 
+**보안 주의사항**: 이 TCP 포트는 별도의 인증 계층이 없다 — 접속만 되면 누구나 조명/콘센트/난방/엘리베이터 호출 등을 제어하는 원본 패킷을 보낼 수 있다. 공유기 포트포워딩 등으로 외부(인터넷)에서 접근 가능하게 노출하지 말고, SmartThings 허브와 같은 신뢰할 수 있는 내부 LAN에서만 접근 가능하도록 구성한다.
+
 ### 10.2 드라이버 패키징 및 설치 (SmartThings CLI)
 ```bash
 smartthings edge:drivers:package commax-ew11-edge
@@ -307,9 +309,11 @@ smartthings edge:drivers:install <DRIVER_ID> --hub <HUB_ID> --channel <CHANNEL_I
 ### 10.4 패킷 테스트 (실제 월패드 없이 실행 가능)
 ```bash
 lua -e "package.path = 'src/?.lua;' .. package.path" tests/test_commax_protocol.lua
-cd tests && lua -e "package.path = '../src/?.lua;' .. package.path" test_ew11_buffer.lua
+cd tests && lua -e "package.path = 'mocks/?.lua;mocks/?/init.lua;../src/?.lua;' .. package.path" test_ew11_buffer.lua
+cd tests && lua -e "package.path = 'mocks/?.lua;mocks/?/init.lua;../src/?.lua;' .. package.path" test_ew11_queue.lua
+cd tests && lua -e "package.path = 'mocks/?.lua;mocks/?/init.lua;../src/?.lua;' .. package.path" test_init_lifecycle.lua
 ```
-체크섬/패킷 생성/파싱, TCP 버퍼 프레이밍(단편화/병합/노이즈 재동기화)을 모두 오프라인으로 검증한다. 실제 월패드 동작 여부는 이 테스트로 보장되지 않으며, EW11 연결 후 실측 캡처(`tools/capture_ew11.ps1`)로 실제 응답을 비교해야 한다.
+체크섬/패킷 생성/파싱, TCP 버퍼 프레이밍(단편화/병합/노이즈 재동기화), TX 큐 직렬화/재시도/드롭 정책 및 ACK 매칭(알려진 프로토콜 충돌 포함, 4절 참고), driver 생명주기(브릿지 삭제/재등록 시 히터 폴링 재등록 여부)를 모두 오프라인으로 검증한다. 실제 월패드 동작 여부는 이 테스트로 보장되지 않으며, EW11 연결 후 실측 캡처(`tools/capture_ew11.ps1`)로 실제 응답을 비교해야 한다.
 
 ### 10.5 실측 캡처 도구 사용법
 

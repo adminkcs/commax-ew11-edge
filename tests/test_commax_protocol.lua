@@ -28,6 +28,23 @@ assert(bcd.decode_word(0x13, 0x13) == 1313, "BCD decode_word(0x13,0x13) should b
 assert(bcd.decode_word(0x00, 0x01) == 1, "BCD decode_word(0x00,0x01) should be 1")
 print("[PASS] BCD Encode/Decode")
 
+-- 1b. BCD with invalid (non-BCD, nibble > 9) input bytes. bcd.decode() does
+-- not validate that each nibble is 0-9 - it just does (tens*10 + ones)
+-- arithmetic on whatever nibbles are present. This is current, deliberate
+-- behavior (not a bug to fix here - see QA review): parse_packet's
+-- checksum check is the actual guard against corrupted bytes reaching BCD
+-- fields at all, so this test only pins down what bcd.decode() itself does
+-- with an out-of-range nibble, as a regression guard against a future
+-- change silently altering this (e.g. by adding validation that throws).
+assert(bcd.decode(0x00) == 0, "BCD decode 0x00 should be 0")
+assert(bcd.decode(0x09) == 9, "BCD decode 0x09 should be 9")
+assert(bcd.decode(0x99) == 99, "BCD decode 0x99 should be 99")
+assert(bcd.decode(0x0A) == 10, "BCD decode of invalid nibble 0x0A (tens=0,ones=10) computes 0*10+10=10, not an error")
+assert(bcd.decode(0xAF) == 115, "BCD decode of invalid nibbles 0xAF (tens=10,ones=15) computes 10*10+15=115, not an error")
+assert(bcd.decode(0xFF) == 165, "BCD decode of invalid nibbles 0xFF (tens=15,ones=15) computes 15*10+15=165, not an error")
+assert(bcd.decode("not a number") == 0, "BCD decode of a non-numeric input returns 0, not an error")
+print("[PASS] BCD invalid-nibble input does not throw (known limitation: no nibble range validation)")
+
 -- 2. Light Command Packets (Ground truth from homenet2mqtt / commax.test.ts)
 local light1_on = protocol.build_light_command(1, true)
 assert_hex("31 01 01 00 00 00 00 33", light1_on, "Light 1 ON")

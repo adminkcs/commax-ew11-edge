@@ -8,8 +8,9 @@ local handler = require("device_handler")
 local commax_driver = {}
 
 function commax_driver:get_device_by_dni(dni)
+  if not self or not self.get_devices then return nil end
   for _, device in ipairs(self:get_devices()) do
-    if device.device_network_id == dni then
+    if device.device_network_id == dni or device.parent_assigned_child_key == dni then
       return device
     end
   end
@@ -21,9 +22,12 @@ end
 --- error) or returns an error, log and continue - one failed device must
 --- not stop the remaining lights/heaters/fan/gas from being created.
 local function safe_create_device(self, spec)
-  local ok, err = pcall(function() self:try_create_device(spec) end)
+  if spec.type == "EDGE_CHILD" and not spec.parent_assigned_child_key then
+    spec.parent_assigned_child_key = spec.device_network_id
+  end
+  local ok, err = pcall(function() return self:try_create_device(spec) end)
   if not ok then
-    log.error(string.format("[Init] Failed to create device %s: %s", spec.device_network_id, tostring(err)))
+    log.error(string.format("[Init] Failed to create device %s: %s", spec.device_network_id or spec.parent_assigned_child_key, tostring(err)))
   end
 end
 
@@ -274,17 +278,27 @@ end
 
 local function device_removed(driver, device)
   log.info(string.format("[Init] Device removed: %s", device.device_network_id))
-  if device.device_network_id == "commax-bridge" and driver.ew11 then
-    driver.ew11:stop()
-    driver.ew11 = nil
+  if device.device_network_id == "commax-bridge" then
+    if driver.ew11 then
+      driver.ew11:stop()
+      driver.ew11 = nil
+    end
+    -- Reset so a later re-add of the bridge (discovery after removal, still
+    -- within the same driver process) can register the heater polling
+    -- schedule again - device_init only schedules it once per process via
+    -- this same flag, and without resetting it here a bridge remove+recreate
+    -- cycle would silently lose heater polling until the whole driver
+    -- process restarts.
+    driver._heater_poll_scheduled = false
   end
 end
 
-local function discovery_handler(driver, should_continue)
+local function discovery_handler(driver, opts, should_continue)
   log.info("[Discovery] Starting discovery for Commax Bridge...")
   if not driver:get_device_by_dni("commax-bridge") then
+    log.info("[Discovery] Creating Commax Bridge device...")
     local ok, err = pcall(function()
-      driver:try_create_device({
+      return driver:try_create_device({
         type = "LAN",
         device_network_id = "commax-bridge",
         label = "코맥스 월패드 브릿지",
@@ -295,7 +309,11 @@ local function discovery_handler(driver, should_continue)
     end)
     if not ok then
       log.error(string.format("[Discovery] Failed to create bridge device: %s", tostring(err)))
+    else
+      log.info("[Discovery] Bridge device creation requested successfully")
     end
+  else
+    log.info("[Discovery] Bridge device already exists, skipping creation")
   end
 end
 
@@ -303,38 +321,41 @@ end
 -- Instantiate Driver
 -- =========================================================================
 
-local driver = Driver("commax-ew11", {
-  discovery = discovery_handler,
-  lifecycle_handlers = {
-    init = device_init,
-    infoChanged = device_info_changed,
-    removed = device_removed
+commax_driver.discovery = discovery_handler
+commax_driver.lifecycle_handlers = {
+  init = device_init,
+  infoChanged = device_info_changed,
+  removed = device_removed
+}
+commax_driver.capability_handlers = {
+  [capabilities.switch.ID] = {
+    [capabilities.switch.commands.on.NAME] = handler.handle_switch_on,
+    [capabilities.switch.commands.off.NAME] = handler.handle_switch_off,
   },
-  capability_handlers = {
-    [capabilities.switch.ID] = {
-      [capabilities.switch.commands.on.NAME] = handler.handle_switch_on,
-      [capabilities.switch.commands.off.NAME] = handler.handle_switch_off,
-    },
-    [capabilities.fanSpeed.ID] = {
-      [capabilities.fanSpeed.commands.setFanSpeed.NAME] = handler.handle_fan_speed,
-    },
-    [capabilities.thermostatMode.ID] = {
-      [capabilities.thermostatMode.commands.setThermostatMode.NAME] = handler.handle_thermostat_mode,
-    },
-    [capabilities.thermostatHeatingSetpoint.ID] = {
-      [capabilities.thermostatHeatingSetpoint.commands.setHeatingSetpoint.NAME] = handler.handle_heating_setpoint,
-    },
-    [capabilities.valve.ID] = {
-      [capabilities.valve.commands.open.NAME] = handler.handle_valve_open,
-      [capabilities.valve.commands.close.NAME] = handler.handle_valve_close,
-    },
-    [capabilities.refresh.ID] = {
-      [capabilities.refresh.commands.refresh.NAME] = handler.handle_refresh,
-    },
-    [capabilities.momentary.ID] = {
-      [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call_down,
-    }
+  [capabilities.fanSpeed.ID] = {
+    [capabilities.fanSpeed.commands.setFanSpeed.NAME] = handler.handle_fan_speed,
+  },
+  [capabilities.thermostatMode.ID] = {
+    [capabilities.thermostatMode.commands.setThermostatMode.NAME] = handler.handle_thermostat_mode,
+  },
+  [capabilities.thermostatHeatingSetpoint.ID] = {
+    [capabilities.thermostatHeatingSetpoint.commands.setHeatingSetpoint.NAME] = handler.handle_heating_setpoint,
+  },
+  [capabilities.valve.ID] = {
+    [capabilities.valve.commands.open.NAME] = handler.handle_valve_open,
+    [capabilities.valve.commands.close.NAME] = handler.handle_valve_close,
+  },
+  [capabilities.refresh.ID] = {
+    [capabilities.refresh.commands.refresh.NAME] = handler.handle_refresh,
+  },
+  [capabilities.momentary.ID] = {
+    [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call_down,
   }
-})
+}
+
+local driver = Driver("commax-ew11", commax_driver)
+driver.get_device_by_dni = commax_driver.get_device_by_dni
+driver.sync_child_devices = commax_driver.sync_child_devices
+driver.poll_all_devices = commax_driver.poll_all_devices
 
 driver:run()
