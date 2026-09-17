@@ -227,6 +227,27 @@ assert(res_fan and res_fan.device_type == "fan", "Parse fan state")
 assert(res_fan.id == 1 and res_fan.is_on == true and res_fan.speed == 2, "Fan 1 should be ON at speed 2")
 print("[PASS] Parse Fan State (ON, speed 2)")
 
+-- Fan ON/speed/mode CONFIRMED 2026-09-17 by real capture (see CMD_FAN comment)
+local fan_hx1 = hex_to_bin("F6 04 01 01 00 00 00 FC") -- 전열, speed 1
+local res_hx1 = protocol.parse_packet(fan_hx1)
+assert(res_hx1.is_on == true and res_hx1.speed == 1, "Fan 전열 speed 1 should be ON, speed 1")
+print("[PASS] Parse Fan State (전열/heat-exchange, speed 1, real-capture-confirmed)")
+
+local fan_hx3 = hex_to_bin("F6 04 01 03 00 00 00 FE") -- 전열, speed 3
+local res_hx3 = protocol.parse_packet(fan_hx3)
+assert(res_hx3.is_on == true and res_hx3.speed == 3, "Fan 전열 speed 3 should be ON, speed 3")
+print("[PASS] Parse Fan State (전열/heat-exchange, speed 3, real-capture-confirmed)")
+
+local fan_bypass = hex_to_bin("F6 07 01 03 00 00 00 01") -- 바이패스, speed 3
+local res_bypass = protocol.parse_packet(fan_bypass)
+assert(res_bypass.is_on == true and res_bypass.speed == 3, "Fan 바이패스 should still parse as ON")
+print("[PASS] Parse Fan State (바이패스/bypass, real-capture-confirmed)")
+
+local fan_auto = hex_to_bin("F6 02 01 01 00 00 00 FA") -- 자동, speed 1
+local res_auto = protocol.parse_packet(fan_auto)
+assert(res_auto.is_on == true and res_auto.speed == 1, "Fan 자동 should still parse as ON")
+print("[PASS] Parse Fan State (자동/auto, real-capture-confirmed)")
+
 -- Thermostat state HEAT (idle, not actively heating): 82 81 01 22 25 00 00 4B
 local thermo_idle_pkt = hex_to_bin("82 81 01 22 25 00 00 4B")
 local res_thermo_idle, err_ti = protocol.parse_packet(thermo_idle_pkt)

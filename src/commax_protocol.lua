@@ -63,8 +63,31 @@ local protocol = {
   -- Command header is 0x78, ack header is 0xF8.
   -- CONFIRMED 2026-09-16 by real EW11 capture: "F6 00 01 00 00 00 00 F7"
   -- observed (header 0xF6 matches the mask, byte1=0x00 -> OFF, byte2=ID 1) -
-  -- matches this parsing exactly. Only the OFF state was observed; ON/speed
-  -- values were not captured (fan was idle).
+  -- matches this parsing exactly.
+  -- ON/speed CONFIRMED 2026-09-17 by real capture, turning the fan on and
+  -- stepping through all 3 speeds on the wallpad (전열/heat-exchange mode):
+  --   speed 1: "F6 04 01 01 00 00 00 FC"
+  --   speed 2: "F6 04 01 02 00 00 00 FD"
+  --   speed 3: "F6 04 01 03 00 00 00 FE"
+  -- byte1 stays 0x04 (ON) across all speeds; byte3 (the `speed` field) is
+  -- the actual 1/2/3 level - matches this parsing exactly, no code change
+  -- needed.
+  --
+  -- Fan MODE (byte1, separate from speed) also CONFIRMED 2026-09-17 by
+  -- stepping through the wallpad's mode selector at fixed speed 3:
+  --   전열(heat-exchange): 0x04  바이패스(bypass): 0x07  자동(auto): 0x02
+  -- The wallpad's 자동 value (0x02) matches homenet2mqtt's fan_new.yaml
+  -- description-table entry for "Auto" exactly. is_on = (byte1 ~= 0x00)
+  -- already covers all three correctly with no code change. Mode itself
+  -- is NOT exposed as a separate SmartThings field (no capability for it
+  -- here) - ON commands from this driver always request 전열 (0x04); mode
+  -- values other than 0x04/0x07/0x02 are simply reported as generic ON.
+  -- 취침(sleep) mode does NOT get its own byte1 value - it reads back
+  -- identical to 전열 (0x04), but with the previously-always-zero trailing
+  -- 3 bytes filled in and slowly counting down (e.g. "01 08 00" ->
+  -- "01 07 3B" -> "01 07 3A" over consecutive polls) - almost certainly a
+  -- sleep-timer countdown, but the exact encoding is unconfirmed and not
+  -- parsed/exposed (not needed for on/off/speed control).
   CMD_FAN          = 0x78,
   ACK_FAN          = 0xF8,
   STATE_FAN_MASK   = 0xF1,
