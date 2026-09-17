@@ -84,13 +84,22 @@ function commax_driver:sync_child_devices(bridge_device)
   end
 
   -- 3. Create Outlets
+  -- Labels below are this home's real outlet 1-10 -> room/fixture mapping,
+  -- confirmed 2026-09-17 by turning each one off individually and checking
+  -- which physical outlet lost power (see LIGHT_LABELS above for the same
+  -- method/rationale).
+  local OUTLET_LABELS = {
+    "거실커텐콘센트", "안방", "곰돌이창문콘센트", "곰돌이콘센트", "하트커텐콘센트",
+    "하트콘센트", "별별이커텐콘센트", "별별이콘센트", "주방밥솥콘센트", "주방가스렌지콘센트",
+  }
   for i = 1, outlet_count do
     local dni = string.format("commax:outlet:%d", i)
     if not self:get_device_by_dni(dni) then
       log.info(string.format("[Init] Creating child outlet device: %s", dni))
+      local name = OUTLET_LABELS[i] or string.format("콘센트 %d", i)
       safe_create_device(self, {
         type = "EDGE_CHILD",
-        label = string.format("코맥스 콘센트 %d", i),
+        label = string.format("%d %s", i, name),
         profile = "commax-outlet",
         parent_device_id = bridge_device.id,
         device_network_id = dni
