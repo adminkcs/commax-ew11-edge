@@ -112,6 +112,22 @@ local protocol = {
   -- Up-call is NOT implemented - untested (the bridge device used to
   -- confirm this had no up-call option in its own app), so its payload
   -- bytes are unknown and must not be guessed.
+  --
+  -- CONFIRMED HEADER COLLISION (2026-09-17, real capture): this home also
+  -- has a batch light on/off ("일괄소등/점등") switch on the same bus,
+  -- using the SAME 0x22/0xA2 header:
+  --   batch OFF: cmd "22 01 00 01 00 00 00 24", ack "A2 00 01 00 00 00 00 A3"
+  --   batch ON:  cmd "22 01 01 01 00 00 00 25", ack "A2 01 01 00 00 00 00 A4"
+  -- The batch-ON ack is BYTE-FOR-BYTE IDENTICAL to the elevator down-call
+  -- ack below (same checksum too) - there is no protocol-level way to tell
+  -- them apart from the ack alone. This is a real ambiguity in the wallpad
+  -- protocol itself, not a parsing bug we can fix. Practical impact: if
+  -- someone presses batch-ON while ew11.lua is still waiting for the
+  -- elevator ack, the TX queue may treat the call as acknowledged one
+  -- retry early. Harmless in practice since the down-call is already sent
+  -- twice per press (see handle_elevator_call_down), and elevator_call_ack
+  -- is never mapped to a SmartThings device event either way. Batch
+  -- on/off is intentionally NOT implemented as a device (not requested).
   CMD_ELEVATOR_CALL_DOWN = { 0x22, 0x01, 0x40, 0x07, 0x00, 0x00, 0x00 },
   ACK_ELEVATOR_CALL_DOWN = { 0xA2, 0x01, 0x01 },
 }
