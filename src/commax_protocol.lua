@@ -24,6 +24,28 @@ local protocol = {
   -- both observed exactly as coded here, alongside the matching 0x02 query
   -- packet ("02 01/02/03 ..."). THERMO_HEATING (0x83, actively firing) was
   -- not observed in this capture (heater was idle) - still unconfirmed.
+  --
+  -- THERMO_AWAY (0x84, payload byte1) CONFIRMED 2026-09-17 by real capture,
+  -- correlated live with the user's own room-by-room actions: thermostat
+  -- ID 2 (안방) read "82 84 02 27 10 00 00 3F" consistently while the room
+  -- was set to "외출"(away) mode on the wallpad, then switched to
+  -- "82 81 02..." (THERMO_HEAT_IDLE) the moment the user changed it to
+  -- heat mode on the wallpad. This is the SAME byte value as ACK_THERMO
+  -- (0x84) but at a different position (payload byte1 of a STATE_THERMO
+  -- packet vs. the header byte of an ack packet) - no parsing collision.
+  -- Treated as "off" for SmartThings purposes (no distinct away capability
+  -- state) - same as the existing THERMO_OFF fallthrough behavior, just
+  -- now named explicitly since the value is confirmed rather than merely
+  -- an unrecognized default case.
+  --
+  -- THERMO_RESERVE (0x00) CONFIRMED 2026-09-17 the same way: switching the
+  -- same room from heat mode to "예약"(reserve/schedule) on the wallpad
+  -- changed byte1 from 0x81 to 0x00 ("82 00 02 27 15 00 00 C0"). Also
+  -- confirmed: the wallpad's "타이머"(timer) mode does NOT produce a
+  -- distinct byte1 value - pressing it left byte1 at 0x81 (identical to
+  -- plain heat mode), so no separate constant exists for it; it is treated
+  -- as ordinary heat.  Treated as "off" for SmartThings purposes, same
+  -- reasoning as THERMO_AWAY above (no matching capability state).
   CMD_THERMO       = 0x04,
   REQ_THERMO       = 0x02,
   STATE_THERMO     = 0x82,
@@ -31,6 +53,8 @@ local protocol = {
   THERMO_OFF       = 0x80,
   THERMO_HEAT_IDLE = 0x81,
   THERMO_HEATING   = 0x83,
+  THERMO_AWAY      = 0x84,
+  THERMO_RESERVE   = 0x00,
 
   -- Fan: confirmed from actual homenet2mqtt entities code (fan_new.yaml),
   -- not from the (inconsistent) description-table comment in that same file.
@@ -378,6 +402,16 @@ function protocol.parse_packet(raw_bytes)
       mode = "heat"
       state = "heating"
     elseif pwr_code == protocol.THERMO_OFF then
+      mode = "off"
+      state = "idle"
+    elseif pwr_code == protocol.THERMO_AWAY then
+      -- CONFIRMED 2026-09-17 (see THERMO_AWAY comment above). No distinct
+      -- "away" capability state exists here - surfaced identically to OFF.
+      mode = "off"
+      state = "idle"
+    elseif pwr_code == protocol.THERMO_RESERVE then
+      -- CONFIRMED 2026-09-17 (see THERMO_RESERVE comment above). No
+      -- distinct "reserve" capability state exists here either.
       mode = "off"
       state = "idle"
     end

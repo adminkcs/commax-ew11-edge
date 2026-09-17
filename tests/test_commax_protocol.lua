@@ -233,6 +233,18 @@ local res_thermo_idle, err_ti = protocol.parse_packet(thermo_idle_pkt)
 assert(res_thermo_idle and res_thermo_idle.mode == "heat" and res_thermo_idle.state == "idle", "Thermo should be heat/idle")
 print("[PASS] Parse Thermostat State (Heat mode, idle)")
 
+-- Thermostat state AWAY: CONFIRMED 2026-09-17 real capture "82 84 02 27 10 00 00 3F"
+local thermo_away_pkt = hex_to_bin("82 84 02 27 10 00 00 3F")
+local res_thermo_away, err_ta = protocol.parse_packet(thermo_away_pkt)
+assert(res_thermo_away and res_thermo_away.mode == "off" and res_thermo_away.state == "idle", "Thermo AWAY should surface as off/idle")
+print("[PASS] Parse Thermostat State (Away mode -> off/idle)")
+
+-- Thermostat state RESERVE: CONFIRMED 2026-09-17 real capture "82 00 02 27 15 00 00 C0"
+local thermo_reserve_pkt = hex_to_bin("82 00 02 27 15 00 00 C0")
+local res_thermo_reserve, err_tr = protocol.parse_packet(thermo_reserve_pkt)
+assert(res_thermo_reserve and res_thermo_reserve.mode == "off" and res_thermo_reserve.state == "idle", "Thermo RESERVE should surface as off/idle")
+print("[PASS] Parse Thermostat State (Reserve mode -> off/idle)")
+
 -- 7. Robustness Tests (fault-injection scenarios from the failure-mode
 -- review: malformed/garbage input must never crash the parser or builders,
 -- since one bad packet/command must not be able to take down the driver)
