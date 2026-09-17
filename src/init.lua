@@ -69,13 +69,25 @@ function commax_driver:sync_child_devices(bridge_device)
   end
 
   -- 2. Create Thermostats
+  -- Labels below are this home's real thermostat 1-4 -> room mapping,
+  -- confirmed 2026-09-17 by setting each one to a distinct target
+  -- temperature (21/22/23/24) and having the user check which room's
+  -- wallpad showed which value (see LIGHT_LABELS above for the same
+  -- method/rationale). ID 2 ("곰돌이난방") is the same physical room as
+  -- "안방" referenced in earlier commax_protocol.lua comments/README
+  -- sections - 안방 is this family's formal name for the room, 곰돌이 is
+  -- the nickname used for its light/outlet/thermostat labels here.
+  local THERMOSTAT_LABELS = {
+    "거실난방", "곰돌이난방", "하트난방", "별별이난방",
+  }
   for i = 1, heater_count do
     local dni = string.format("commax:thermostat:%d", i)
     if not self:get_device_by_dni(dni) then
       log.info(string.format("[Init] Creating child thermostat device: %s", dni))
+      local name = THERMOSTAT_LABELS[i] or string.format("난방 %d", i)
       safe_create_device(self, {
         type = "EDGE_CHILD",
-        label = string.format("코맥스 난방 %d", i),
+        label = string.format("%d %s", i, name),
         profile = "commax-thermostat",
         parent_device_id = bridge_device.id,
         device_network_id = dni
