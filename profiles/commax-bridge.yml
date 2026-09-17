@@ -82,7 +82,7 @@ preferences:
     definition:
       default: true
   - name: pollInterval
-    title: "Heater Status Polling Interval (seconds)"
+    title: "Heater Polling Interval (sec)"
     description: "Interval to query heaters (0 to disable active query)"
     required: true
     preferenceType: integer
