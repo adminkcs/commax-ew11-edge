@@ -93,8 +93,18 @@ local protocol = {
   -- "F9 11 01 10..." (on) - i.e. STATE/ACK byte1 0x10=OFF, 0x11=ON, byte2=ID.
   -- The 4th payload byte in the query/state pair (0x01/0x02 in the query,
   -- 0x10/0x20 in the reply) selects which attribute is being read; only
-  -- attr 0x01/0x10 (power state) is used here - the meaning of attr
-  -- 0x02/0x20 (possibly power consumption) is not confirmed and unused.
+  -- attr 0x01/0x10 (power state) is used here.
+  --
+  -- attr 0x02/0x20 is NOT power consumption - REFUTED 2026-09-17 by real
+  -- test: homenet2mqtt's smart_plugs_new.yaml documents this reply as a
+  -- BCD power-consumption value (data[4..6] -> watts*0.1), but plugging in
+  -- and running a hair dryer on outlet 1 (a genuine multi-hundred-watt
+  -- load) produced no change at all in this field - it stayed
+  -- "F9 11 01 20 00 00 00 2B" (all-zero payload) before, during, and after
+  -- 30+ seconds of real load, identical to every other idle outlet. This
+  -- field's actual meaning is unknown; it is deliberately left unparsed
+  -- and unexposed rather than trusting the secondary-source formula that
+  -- real hardware evidence contradicts.
   CMD_OUTLET       = 0x7A,
   ACK_OUTLET       = 0xFA,
   REQ_OUTLET       = 0x79,
