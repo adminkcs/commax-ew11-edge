@@ -2,7 +2,7 @@
 
 코맥스(Commax) 아파트 월패드와 Elfin EW11(RS485 ↔ TCP 변환기)을 연동하여 SmartThings 허브에서 조명, 난방, 환기팬, 가스밸브를 로컬 제어하고 실시간 상태를 모니터링하는 SmartThings Edge Driver입니다.
 
-이 드라이버의 패킷 정의는 **직접 추측한 값이 아니라**, 공개 저장소 [wooooooooooook/homenet2mqtt](https://github.com/wooooooooooook/homenet2mqtt) (`gallery/commax/*.yaml`)의 실제 소스코드를 분석해 확보한 값만 사용합니다. 근거가 확인되지 않은 패킷은 구현하지 않고 "정보 불충분"으로 남겨 두었습니다 (8절 참고).
+이 드라이버의 패킷 정의는 **직접 추측한 값이 아닙니다**. 초기에는 공개 저장소 [wooooooooooook/homenet2mqtt](https://github.com/wooooooooooook/homenet2mqtt) (`gallery/commax/*.yaml`) 등을 분석해 가설을 세웠지만, 지금 코드에 들어간 대부분의 값은 **우리 집 EW11에 직접 연결해 실측 캡처로 확정**한 것입니다(3.3~3.9절). 참고 저장소 값이 실측과 다르게 나온 경우(가스밸브 닫힘값, PM10 서브바이트 등)는 실측을 우선해 정정했고, 참고 저장소의 주장이 실측으로 반박된 경우(콘센트 attr=0x02 소비전력설)도 있습니다. 여전히 근거가 확인되지 않은 패킷은 구현하지 않고 "정보 불충분"으로 남겨 두었습니다 (8절 참고).
 
 ---
 
