@@ -44,13 +44,23 @@ function commax_driver:sync_child_devices(bridge_device)
   local enable_elevator = (prefs.enableElevator ~= false)
 
   -- 1. Create Lights
+  -- Labels below are this home's real light 1-8 -> room/fixture mapping,
+  -- confirmed 2026-09-17 by turning each one on individually and checking
+  -- which physical light responded. Kept as "N 이름" (number first) so the
+  -- SmartThings app tile still shows the underlying ID for easy re-editing
+  -- if a different home reuses this driver.
+  local LIGHT_LABELS = {
+    "거실보조불", "거실불", "곰돌이불", "곰돌이보조불",
+    "하트불", "별별이불", "주방불", "주방간접등",
+  }
   for i = 1, light_count do
     local dni = string.format("commax:light:%d", i)
     if not self:get_device_by_dni(dni) then
       log.info(string.format("[Init] Creating child light device: %s", dni))
+      local name = LIGHT_LABELS[i] or string.format("조명 %d", i)
       safe_create_device(self, {
         type = "EDGE_CHILD",
-        label = string.format("코맥스 조명 %d", i),
+        label = string.format("%d %s", i, name),
         profile = "commax-light",
         parent_device_id = bridge_device.id,
         device_network_id = dni
