@@ -36,23 +36,22 @@ function commax_driver:sync_child_devices(bridge_device)
   local prefs = bridge_device.preferences or {}
 
   -- Preferences come from user input in the SmartThings app - clamp to the
-  -- profile's declared range rather than trusting them blindly (a stale or
-  -- malformed value should not be able to create an unbounded number of
-  -- devices or silently produce 0/negative loop bounds).
-  local light_count = math.max(0, math.min(9, tonumber(prefs.lightCount) or 4))
-  local heater_count = math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4))
-  local outlet_count = math.max(0, math.min(12, tonumber(prefs.outletCount) or 10))
+  -- profile's declared range rather than trusting them blindly.
+  local enable_light = (prefs.enableLight ~= false)
+  local light_count = enable_light and math.max(0, math.min(9, tonumber(prefs.lightCount) or 4)) or 0
+
+  local enable_heating = (prefs.enableHeating ~= false)
+  local heater_count = enable_heating and math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4)) or 0
+
+  local enable_outlet = (prefs.enableOutlet ~= false)
+  local outlet_count = enable_outlet and math.max(0, math.min(12, tonumber(prefs.outletCount) or 10)) or 0
+
   local enable_fan = (prefs.enableFan ~= false)
   local enable_gas = (prefs.enableGas ~= false)
   local enable_air_quality = (prefs.enableAirQuality ~= false)
   local enable_elevator = (prefs.enableElevator ~= false)
 
   -- 1. Create Lights
-  -- Labels below are this home's real light 1-8 -> room/fixture mapping,
-  -- confirmed 2026-09-17 by turning each one on individually and checking
-  -- which physical light responded. Kept as "N 이름" (number first) so the
-  -- SmartThings app tile still shows the underlying ID for easy re-editing
-  -- if a different home reuses this driver.
   local LIGHT_LABELS = {
     "거실보조불", "거실불", "곰돌이불", "곰돌이보조불",
     "하트불", "별별이불", "주방불", "주방간접등",
@@ -73,14 +72,6 @@ function commax_driver:sync_child_devices(bridge_device)
   end
 
   -- 2. Create Thermostats
-  -- Labels below are this home's real thermostat 1-4 -> room mapping,
-  -- confirmed 2026-09-17 by setting each one to a distinct target
-  -- temperature (21/22/23/24) and having the user check which room's
-  -- wallpad showed which value (see LIGHT_LABELS above for the same
-  -- method/rationale). ID 2 ("곰돌이난방") is the same physical room as
-  -- "안방" referenced in earlier commax_protocol.lua comments/README
-  -- sections - 안방 is this family's formal name for the room, 곰돌이 is
-  -- the nickname used for its light/outlet/thermostat labels here.
   local THERMOSTAT_LABELS = {
     "거실난방", "곰돌이난방", "하트난방", "별별이난방",
   }
@@ -100,10 +91,6 @@ function commax_driver:sync_child_devices(bridge_device)
   end
 
   -- 3. Create Outlets
-  -- Labels below are this home's real outlet 1-10 -> room/fixture mapping,
-  -- confirmed 2026-09-17 by turning each one off individually and checking
-  -- which physical outlet lost power (see LIGHT_LABELS above for the same
-  -- method/rationale).
   local OUTLET_LABELS = {
     "거실커텐콘센트", "안방", "곰돌이창문콘센트", "곰돌이콘센트", "하트커텐콘센트",
     "하트콘센트", "별별이커텐콘센트", "별별이콘센트", "주방밥솥콘센트", "주방가스렌지콘센트",
@@ -182,6 +169,41 @@ function commax_driver:sync_child_devices(bridge_device)
       })
     end
   end
+
+  -- 8. Check for devices that have been disabled in Preferences
+  -- [SmartThings 제한]: SmartThings Edge SDK does not provide a driver API
+  -- (e.g. driver:try_delete_device) to delete child devices programmatically.
+  -- Log explicit warnings so users know they must delete them from the ST app.
+  if self.get_devices then
+    for _, dev in ipairs(self:get_devices()) do
+      if dev.device_network_id ~= "commax-bridge" and dev.parent_device_id == bridge_device.id then
+        local dni = dev.device_network_id
+        local is_stale = false
+        local l_id = dni:match("^commax:light:(%d+)$")
+        local t_id = dni:match("^commax:thermostat:(%d+)$")
+        local o_id = dni:match("^commax:outlet:(%d+)$")
+        if l_id and (not enable_light or tonumber(l_id) > light_count) then
+          is_stale = true
+        elseif t_id and (not enable_heating or tonumber(t_id) > heater_count) then
+          is_stale = true
+        elseif o_id and (not enable_outlet or tonumber(o_id) > outlet_count) then
+          is_stale = true
+        elseif dni == "commax:fan:1" and not enable_fan then
+          is_stale = true
+        elseif dni == "commax:gas:1" and not enable_gas then
+          is_stale = true
+        elseif dni == "commax:airquality:1" and not enable_air_quality then
+          is_stale = true
+        elseif dni == "commax:elevator:1" and not enable_elevator then
+          is_stale = true
+        end
+
+        if is_stale then
+          log.warn(string.format("[Init] [SmartThings 제한] Device %s (%s) is disabled by Settings, but Edge SDK has no programmatic device deletion API. Please remove it manually in the SmartThings app.", dev.label, dni))
+        end
+      end
+    end
+  end
 end
 
 function commax_driver:poll_all_devices()
@@ -196,12 +218,7 @@ function commax_driver:poll_all_devices()
   end
 end
 
---- Validate EW11 connection preferences before acting on them. Preference
---- values come from free-form user input in the SmartThings app (or a
---- pre-existing device with a preference cleared/corrupted) - an empty IP,
---- non-numeric port, or out-of-range port must not be handed straight to
---- the socket layer, where they would just cause a silent/cryptic infinite
---- reconnect loop instead of a clear diagnostic.
+--- Validate EW11 connection preferences before acting on them.
 local function validate_ew11_prefs(ip, port)
   if type(ip) ~= "string" or #ip == 0 then
     return nil, nil, "EW11 IP is empty or invalid"
@@ -213,6 +230,16 @@ local function validate_ew11_prefs(ip, port)
   return ip, math.floor(port_num), nil
 end
 
+local function build_ew11_config(prefs)
+  prefs = prefs or {}
+  return {
+    tx_retry_cnt = prefs.txRetryCount,
+    tx_delay_ms = prefs.txDelay,
+    rx_timeout_ms = prefs.rxTimeout,
+    ack_timeout_ms = prefs.ackTimeout,
+  }
+end
+
 -- =========================================================================
 -- Driver Lifecycle Handlers
 -- =========================================================================
@@ -222,17 +249,19 @@ local function device_init(driver, device)
 
   if device.device_network_id == "commax-bridge" then
     local prefs = device.preferences or {}
-    local ip, port, verr = validate_ew11_prefs(prefs.ew11Ip or "192.168.0.83", prefs.ew11Port or 8899)
+    local ip, port, verr = validate_ew11_prefs(prefs.ew11Ip or "192.168.50.243", prefs.ew11Port or 8899)
+    local config = build_ew11_config(prefs)
+
     if verr then
       log.error(string.format("[Init] Invalid EW11 preferences (%s) - not (re)connecting until fixed in Settings", verr))
     else
       if not driver.ew11 then
         driver.ew11 = EW11.new(driver, ip, port, function(parsed)
           handler.handle_parsed_packet(driver, parsed)
-        end)
+        end, config)
         driver.ew11:start()
       else
-        driver.ew11:update_config(ip, port)
+        driver.ew11:update_config(ip, port, config)
       end
     end
 
@@ -241,11 +270,8 @@ local function device_init(driver, device)
       log.error(string.format("[Init] sync_child_devices failed: %s", tostring(err)))
     end
 
-    -- Start periodic query schedule if enabled. device_init can legitimately
-    -- fire more than once for the same device (e.g. driver restart, hub
-    -- resync) - guard against registering the same named schedule twice,
-    -- which would otherwise double the heater polling rate.
-    local interval = tonumber(prefs.pollInterval) or 10
+    -- Start periodic query schedule if enabled.
+    local interval = tonumber(prefs.refreshTime) or tonumber(prefs.pollInterval) or 10
     if interval > 0 and not driver._heater_poll_scheduled then
       driver._heater_poll_scheduled = true
       driver:call_on_schedule(interval, function()
@@ -261,12 +287,23 @@ end
 local function device_info_changed(driver, device, event, args)
   log.info(string.format("[Init] Device info changed: %s", device.device_network_id))
   if device.device_network_id == "commax-bridge" then
+    local old_prefs = (args and args.old_st_store and args.old_st_store.preferences) or {}
     local prefs = device.preferences or {}
+
+    log.info(string.format("[Init] Preferences diff: IP %s -> %s, Port %s -> %s, Retry %s -> %s, Delay %s -> %s, ACK_TO %s -> %s, Refresh %s -> %s",
+      tostring(old_prefs.ew11Ip), tostring(prefs.ew11Ip),
+      tostring(old_prefs.ew11Port), tostring(prefs.ew11Port),
+      tostring(old_prefs.txRetryCount), tostring(prefs.txRetryCount),
+      tostring(old_prefs.txDelay), tostring(prefs.txDelay),
+      tostring(old_prefs.ackTimeout), tostring(prefs.ackTimeout),
+      tostring(prefs.refreshTime or prefs.pollInterval)))
+
     local ip, port, verr = validate_ew11_prefs(prefs.ew11Ip, prefs.ew11Port)
+    local config = build_ew11_config(prefs)
     if verr then
       log.error(string.format("[Init] Invalid EW11 preferences after change (%s) - keeping previous connection", verr))
     elseif driver.ew11 then
-      driver.ew11:update_config(ip, port)
+      driver.ew11:update_config(ip, port, config)
     end
 
     local ok, err = pcall(function() driver:sync_child_devices(device) end)

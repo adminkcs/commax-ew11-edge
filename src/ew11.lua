@@ -16,6 +16,7 @@ EW11.__index = EW11
 local DEFAULT_TX_RETRY_CNT = 5
 local DEFAULT_TX_TIMEOUT = 0.2
 local DEFAULT_TX_DELAY = 0.01
+local DEFAULT_RX_TIMEOUT = 0.01
 
 -- Defensive bounds (not from the reference source - added because a
 -- long-running driver must survive garbage data / command floods without
@@ -25,7 +26,37 @@ local MAX_TX_QUEUE = 20      -- pending commands; drop oldest beyond this
 local MIN_RECONNECT_DELAY = 5
 local MAX_RECONNECT_DELAY = 60
 
-function EW11.new(driver, ip, port, on_packet_cb)
+local function parse_timing_config(config)
+  config = config or {}
+  local retry = tonumber(config.tx_retry_cnt) or DEFAULT_TX_RETRY_CNT
+  if retry < 0 then retry = 0 end
+  if retry > 10 then retry = 10 end
+
+  local tx_timeout_s = DEFAULT_TX_TIMEOUT
+  if config.ack_timeout_ms ~= nil then
+    tx_timeout_s = (tonumber(config.ack_timeout_ms) or 200) / 1000
+  elseif config.tx_timeout ~= nil then
+    tx_timeout_s = tonumber(config.tx_timeout) or DEFAULT_TX_TIMEOUT
+  end
+
+  local tx_delay_s = DEFAULT_TX_DELAY
+  if config.tx_delay_ms ~= nil then
+    tx_delay_s = (tonumber(config.tx_delay_ms) or 10) / 1000
+  elseif config.tx_delay ~= nil then
+    tx_delay_s = tonumber(config.tx_delay) or DEFAULT_TX_DELAY
+  end
+
+  local rx_timeout_s = DEFAULT_RX_TIMEOUT
+  if config.rx_timeout_ms ~= nil then
+    rx_timeout_s = (tonumber(config.rx_timeout_ms) or 10) / 1000
+  elseif config.rx_timeout ~= nil then
+    rx_timeout_s = tonumber(config.rx_timeout) or DEFAULT_RX_TIMEOUT
+  end
+
+  return retry, tx_timeout_s, tx_delay_s, rx_timeout_s
+end
+
+function EW11.new(driver, ip, port, on_packet_cb, config)
   local self = setmetatable({}, EW11)
   self.driver = driver
   self.ip = ip
@@ -39,19 +70,16 @@ function EW11.new(driver, ip, port, on_packet_cb)
   -- serialized (one at a time, ACK-confirmed) rather than fired concurrently.
   self.tx_queue = {}
   self.pending = nil -- in-flight job awaiting ACK: {packet, ack_prefix, attempts_left, sent_at}
-  self.tx_retry_cnt = DEFAULT_TX_RETRY_CNT
-  self.tx_timeout = DEFAULT_TX_TIMEOUT
-  self.tx_delay = DEFAULT_TX_DELAY
+  self.tx_retry_cnt, self.tx_timeout, self.tx_delay, self.rx_timeout = parse_timing_config(config)
 
-  -- rx_timeout: stale partial-buffer discard threshold (packet-parser.ts),
-  -- default 10ms per the reference bridge config.
-  self.rx_timeout = 0.01
   self.last_rx_time = nil
 
-  -- Reconnect backoff state (not from reference source): avoids hammering
-  -- the network / log with a reconnect attempt every few seconds forever
-  -- when EW11 is down for an extended period.
+  -- Reconnect backoff state: avoids hammering the network / log with a reconnect
+  -- attempt every few seconds forever when EW11 is down for an extended period.
   self.reconnect_delay = MIN_RECONNECT_DELAY
+
+  log.info(string.format("[EW11] Initialized: target=%s:%d, retry=%d, ack_timeout=%.3fs, tx_delay=%.3fs, rx_timeout=%.3fs",
+    tostring(self.ip), self.port, self.tx_retry_cnt, self.tx_timeout, self.tx_delay, self.rx_timeout))
   return self
 end
 
@@ -77,12 +105,25 @@ function EW11:stop()
   end
 end
 
-function EW11:update_config(ip, port)
-  local changed = (self.ip ~= ip or self.port ~= tonumber(port))
+function EW11:update_config(ip, port, config)
+  local new_port = tonumber(port) or 8899
+  local ip_changed = (self.ip ~= ip)
+  local port_changed = (self.port ~= new_port)
+  local conn_changed = (ip_changed or port_changed)
+
+  local old_ip, old_port = self.ip, self.port
   self.ip = ip
-  self.port = tonumber(port) or 8899
-  if changed and self.sock then
-    log.info(string.format("[EW11] Configuration updated to %s:%d. Reconnecting...", self.ip, self.port))
+  self.port = new_port
+
+  if config then
+    self.tx_retry_cnt, self.tx_timeout, self.tx_delay, self.rx_timeout = parse_timing_config(config)
+  end
+
+  log.info(string.format("[EW11] Config updated: target=%s:%d, retry=%d, ack_timeout=%.3fs, tx_delay=%.3fs, rx_timeout=%.3fs",
+    tostring(self.ip), self.port, self.tx_retry_cnt, self.tx_timeout, self.tx_delay, self.rx_timeout))
+
+  if conn_changed and self.sock then
+    log.info(string.format("[EW11] Endpoint changed from %s:%d to %s:%d. Reconnecting...", tostring(old_ip), old_port, tostring(self.ip), self.port))
     self.sock:close()
     self.sock = nil
   end
@@ -175,6 +216,8 @@ function EW11:_tx_queue_tick()
           self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
         self.pending = nil
       else
+        log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
+          self.tx_timeout, self.pending.attempts_left))
         socket.sleep(self.tx_delay)
         self:_write(self.pending.packet)
         self.pending.sent_at = socket.gettime()

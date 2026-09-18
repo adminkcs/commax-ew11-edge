@@ -9,50 +9,116 @@ components:
 preferences:
   - name: ew11Ip
     title: "EW11 IP Address"
-    description: "Enter the local IP address of your Elfin EW11 (e.g. 192.168.0.83)"
+    description: "Enter local IP address of Elfin EW11 (e.g. 192.168.50.243)"
     required: true
     preferenceType: string
     definition:
       stringType: text
       minLength: 7
       maxLength: 15
-      default: "192.168.0.83"
+      default: "192.168.50.243"
   - name: ew11Port
     title: "EW11 Port"
-    description: "Enter the TCP port configured in EW11 (Default: 8899 or 8888)"
+    description: "Enter TCP port configured in EW11 (Default: 8899)"
     required: true
     preferenceType: integer
     definition:
       minimum: 1
       maximum: 65535
       default: 8899
+  - name: txRetryCount
+    title: "TX Retry Count"
+    description: "Max retries after initial send if no ACK is received (0 to 10)"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 10
+      default: 5
+  - name: txDelay
+    title: "TX Retry Delay (ms)"
+    description: "Delay in ms before retrying unacknowledged command (0 to 1000)"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 1000
+      default: 10
+  - name: rxTimeout
+    title: "RX Frame Timeout (ms)"
+    description: "Threshold in ms to discard stale partial bytes in RX buffer"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 5
+      maximum: 100
+      default: 10
+  - name: ackTimeout
+    title: "ACK Wait Timeout (ms)"
+    description: "Time in ms to wait for an ACK packet before timing out"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 50
+      maximum: 2000
+      default: 200
+  - name: refreshTime
+    title: "Status Polling Interval (sec)"
+    description: "Interval to query heaters (0 to disable periodic poll)"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 60
+      default: 10
+  - name: enableLight
+    title: "Enable Lights"
+    description: "Create and manage light child devices"
+    required: true
+    preferenceType: boolean
+    definition:
+      default: true
   - name: lightCount
     title: "Number of Lights"
-    description: "How many lights to discover and create (1 to 9)"
+    description: "How many lights to discover and create (0 to 9)"
     required: true
     preferenceType: integer
     definition:
       minimum: 0
       maximum: 9
       default: 4
-  - name: heaterCount
-    title: "Number of Thermostats (Heaters)"
-    description: "How many heating zones/rooms to create (0 to 9)"
+  - name: enableOutlet
+    title: "Enable Outlets"
+    description: "Create and manage switched outlet child devices"
     required: true
-    preferenceType: integer
+    preferenceType: boolean
     definition:
-      minimum: 0
-      maximum: 9
-      default: 4
+      default: true
   - name: outletCount
     title: "Number of Outlets"
-    description: "How many switched outlets/plugs to discover and create (0 to 12)"
+    description: "How many switched outlets to discover and create (0 to 12)"
     required: true
     preferenceType: integer
     definition:
       minimum: 0
       maximum: 12
       default: 10
+  - name: enableHeating
+    title: "Enable Thermostats"
+    description: "Create and manage heating zone child devices"
+    required: true
+    preferenceType: boolean
+    definition:
+      default: true
+  - name: heaterCount
+    title: "Number of Thermostats"
+    description: "How many heating zones to discover and create (0 to 9)"
+    required: true
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 9
+      default: 4
   - name: enableFan
     title: "Enable Ventilation Fan"
     description: "Create ventilation fan device if available"
@@ -76,17 +142,17 @@ preferences:
       default: true
   - name: enableElevator
     title: "Enable Elevator Down-Call"
-    description: "Create a momentary button device that calls the elevator down (only the down-call packet is confirmed; there is no up-call or status)"
+    description: "Create a momentary button device that calls the elevator down"
     required: true
     preferenceType: boolean
     definition:
       default: true
-  - name: pollInterval
-    title: "Heater Polling Interval (sec)"
-    description: "Interval to query heaters (0 to disable active query)"
+  - name: elevatorCallCount
+    title: "Elevator Call Repeat Count"
+    description: "Number of packets sent per down-call trigger (1 to 5)"
     required: true
     preferenceType: integer
     definition:
-      minimum: 0
-      maximum: 60
-      default: 10
+      minimum: 1
+      maximum: 5
+      default: 2

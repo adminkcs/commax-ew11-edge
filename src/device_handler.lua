@@ -221,14 +221,21 @@ end
 --- capture: the physical trigger (a separate RS485-to-Matter bridge on the
 --- same bus) sends the exact same command packet TWICE, ~12ms apart, each
 --- separately ACKed, for a single logical call - not once. Enqueue it
---- twice here to match that observed real-world behavior rather than
---- guessing that a single send is sufficient.
+--- repeat_cnt times (default 2, configurable via elevatorCallCount preference)
+--- without confusing this with ordinary command ACK retry counts.
 function handler.handle_elevator_call_down(driver, device, command)
   log.info("[Handler] Elevator down-call requested")
   local packet = protocol.build_elevator_call_down()
   local ack = protocol.ack_elevator_call_down()
-  safe_send(driver, packet, ack)
-  safe_send(driver, packet, ack)
+
+  local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
+  local prefs = (bridge and bridge.preferences) or {}
+  local repeat_cnt = math.max(1, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
+
+  log.info(string.format("[Handler] Enqueuing %d elevator down-call packet(s)", repeat_cnt))
+  for _ = 1, repeat_cnt do
+    safe_send(driver, packet, ack)
+  end
 end
 
 function handler.handle_refresh(driver, device, command)
