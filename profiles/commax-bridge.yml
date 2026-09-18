@@ -8,8 +8,8 @@ components:
       - name: Bridges
 preferences:
   - name: ew11Ip
-    title: "EW11 IP Address"
-    description: "Enter local IP address of Elfin EW11 (e.g. 192.168.50.243)"
+    title: "EW11 IP 주소"
+    description: "Elfin EW11의 로컬 IP 주소를 입력하세요 (기본값: 192.168.50.243)"
     required: true
     preferenceType: string
     definition:
@@ -18,8 +18,8 @@ preferences:
       maxLength: 15
       default: "192.168.50.243"
   - name: ew11Port
-    title: "EW11 Port"
-    description: "Enter TCP port configured in EW11 (Default: 8899)"
+    title: "EW11 포트 번호"
+    description: "EW11에 설정된 TCP 포트 번호를 입력하세요 (기본값: 8899)"
     required: true
     preferenceType: integer
     definition:
@@ -27,8 +27,8 @@ preferences:
       maximum: 65535
       default: 8899
   - name: txRetryCount
-    title: "TX Retry Count"
-    description: "Max retries after initial send if no ACK is received (0 to 10)"
+    title: "명령 재전송 횟수"
+    description: "ACK 응답이 없을 때 명령을 재전송할 최대 횟수 (0~10회)"
     required: true
     preferenceType: integer
     definition:
@@ -36,8 +36,8 @@ preferences:
       maximum: 10
       default: 5
   - name: txDelay
-    title: "TX Retry Delay (ms)"
-    description: "Delay in ms before retrying unacknowledged command (0 to 1000)"
+    title: "재전송 지연 시간 (ms)"
+    description: "명령 재전송 시 패킷 간 대기 시간 (밀리초, 기본값: 10ms)"
     required: true
     preferenceType: integer
     definition:
@@ -45,8 +45,8 @@ preferences:
       maximum: 1000
       default: 10
   - name: rxTimeout
-    title: "RX Frame Timeout (ms)"
-    description: "Threshold in ms to discard stale partial bytes in RX buffer"
+    title: "수신 버퍼 정리 시간 (ms)"
+    description: "불완전한 잔여 수신 버퍼 폐기 임계 시간 (밀리초, 기본값: 10ms)"
     required: true
     preferenceType: integer
     definition:
@@ -54,8 +54,8 @@ preferences:
       maximum: 100
       default: 10
   - name: ackTimeout
-    title: "ACK Wait Timeout (ms)"
-    description: "Time in ms to wait for an ACK packet before timing out"
+    title: "응답 대기 시간 (ms)"
+    description: "ACK 수신을 기다리는 제한 시간 (밀리초, 기본값: 200ms)"
     required: true
     preferenceType: integer
     definition:
@@ -63,8 +63,8 @@ preferences:
       maximum: 2000
       default: 200
   - name: refreshTime
-    title: "Status Polling Interval (sec)"
-    description: "Interval to query heaters (0 to disable periodic poll)"
+    title: "난방 상태 조회 주기 (초)"
+    description: "난방 상태를 주기적으로 조회할 간격 (초 단위, 0은 자동조회 끄기)"
     required: true
     preferenceType: integer
     definition:
@@ -72,15 +72,15 @@ preferences:
       maximum: 60
       default: 10
   - name: enableLight
-    title: "Enable Lights"
-    description: "Create and manage light child devices"
+    title: "조명 스위치 사용"
+    description: "조명 스위치 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: lightCount
-    title: "Number of Lights"
-    description: "How many lights to discover and create (0 to 9)"
+    title: "조명 개수"
+    description: "등록할 조명 스위치 개수 (0~9개)"
     required: true
     preferenceType: integer
     definition:
@@ -88,15 +88,15 @@ preferences:
       maximum: 9
       default: 4
   - name: enableOutlet
-    title: "Enable Outlets"
-    description: "Create and manage switched outlet child devices"
+    title: "콘센트 스위치 사용"
+    description: "대기전력/스마트 콘센트 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: outletCount
-    title: "Number of Outlets"
-    description: "How many switched outlets to discover and create (0 to 12)"
+    title: "콘센트 개수"
+    description: "등록할 콘센트 스위치 개수 (0~12개)"
     required: true
     preferenceType: integer
     definition:
@@ -104,15 +104,15 @@ preferences:
       maximum: 12
       default: 10
   - name: enableHeating
-    title: "Enable Thermostats"
-    description: "Create and manage heating zone child devices"
+    title: "난방 온도조절기 사용"
+    description: "각 방 난방 온도조절기 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: heaterCount
-    title: "Number of Thermostats"
-    description: "How many heating zones to discover and create (0 to 9)"
+    title: "난방 구역 개수"
+    description: "등록할 난방 구역(방) 개수 (0~9개)"
     required: true
     preferenceType: integer
     definition:
@@ -120,36 +120,36 @@ preferences:
       maximum: 9
       default: 4
   - name: enableFan
-    title: "Enable Ventilation Fan"
-    description: "Create ventilation fan device if available"
+    title: "환기팬 사용"
+    description: "전열교환기 환기팬 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: enableGas
-    title: "Enable Gas Valve"
-    description: "Create gas valve device (Read & Close only)"
+    title: "가스 차단 밸브 사용"
+    description: "가스 차단 밸브 기기 생성 (안전 법규상 닫기 전용)"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: enableAirQuality
-    title: "Enable Air Quality Sensor"
-    description: "Create CO2/PM2.5/PM10 sensor device (read-only) if available"
+    title: "공기질 센서 사용"
+    description: "CO2, PM2.5, PM10 복합 공기질 센서 기기 생성"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: enableElevator
-    title: "Enable Elevator Down-Call"
-    description: "Create a momentary button device that calls the elevator down"
+    title: "엘리베이터 호출 사용"
+    description: "엘리베이터 하강 호출 버튼 기기 생성"
     required: true
     preferenceType: boolean
     definition:
       default: true
   - name: elevatorCallCount
-    title: "Elevator Call Repeat Count"
-    description: "Number of packets sent per down-call trigger (1 to 5)"
+    title: "엘리베이터 호출 반복 전송"
+    description: "1회 호출 버튼 클릭 시 패킷 반복 전송 횟수 (1~5회, 기본값 2회)"
     required: true
     preferenceType: integer
     definition:

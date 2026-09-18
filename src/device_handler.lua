@@ -117,46 +117,66 @@ end
 -- SmartThings Capability Command Handlers
 -- =========================================================================
 
+local function get_effective_dni(device)
+  return (device and (device.parent_assigned_child_key or device.device_network_id)) or ""
+end
+
+-- =========================================================================
+-- SmartThings Capability Command Handlers
+-- =========================================================================
+
 function handler.handle_switch_on(driver, device, command)
-  local dni = device.device_network_id
-  log.info(string.format("[Handler] Switch ON requested for %s", dni))
+  local dni = get_effective_dni(device)
+  log.info(string.format("[Handler] Switch ON requested for %s (effective DNI: %s)", device.label or "unknown", dni))
 
   if dni:match("^commax:light:(%d+)$") then
     local light_id = tonumber(dni:match("^commax:light:(%d+)$"))
     local packet = protocol.build_light_command(light_id, true)
+    device:emit_event(capabilities.switch.switch.on())
     safe_send(driver, packet, protocol.ack_light_command(light_id, true))
   elseif dni:match("^commax:fan:(%d+)$") then
     local fan_id = tonumber(dni:match("^commax:fan:(%d+)$"))
     local packet = protocol.build_fan_power(fan_id, true)
+    device:emit_event(capabilities.switch.switch.on())
+    device:emit_event(capabilities.fanSpeed.fanSpeed(1))
     safe_send(driver, packet, protocol.ack_fan_on())
   elseif dni:match("^commax:outlet:(%d+)$") then
     local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
     local packet = protocol.build_outlet_command(outlet_id, true)
+    device:emit_event(capabilities.switch.switch.on())
     safe_send(driver, packet, protocol.ack_outlet_command(outlet_id, true))
+  else
+    log.warn(string.format("[Handler] Switch ON received for unrecognized device: %s", dni))
   end
 end
 
 function handler.handle_switch_off(driver, device, command)
-  local dni = device.device_network_id
-  log.info(string.format("[Handler] Switch OFF requested for %s", dni))
+  local dni = get_effective_dni(device)
+  log.info(string.format("[Handler] Switch OFF requested for %s (effective DNI: %s)", device.label or "unknown", dni))
 
   if dni:match("^commax:light:(%d+)$") then
     local light_id = tonumber(dni:match("^commax:light:(%d+)$"))
     local packet = protocol.build_light_command(light_id, false)
+    device:emit_event(capabilities.switch.switch.off())
     safe_send(driver, packet, protocol.ack_light_command(light_id, false))
   elseif dni:match("^commax:fan:(%d+)$") then
     local fan_id = tonumber(dni:match("^commax:fan:(%d+)$"))
     local packet = protocol.build_fan_power(fan_id, false)
+    device:emit_event(capabilities.switch.switch.off())
+    device:emit_event(capabilities.fanSpeed.fanSpeed(0))
     safe_send(driver, packet, protocol.ack_fan_off())
   elseif dni:match("^commax:outlet:(%d+)$") then
     local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
     local packet = protocol.build_outlet_command(outlet_id, false)
+    device:emit_event(capabilities.switch.switch.off())
     safe_send(driver, packet, protocol.ack_outlet_command(outlet_id, false))
+  else
+    log.warn(string.format("[Handler] Switch OFF received for unrecognized device: %s", dni))
   end
 end
 
 function handler.handle_fan_speed(driver, device, command)
-  local dni = device.device_network_id
+  local dni = get_effective_dni(device)
   local fan_id = tonumber(dni:match("^commax:fan:(%d+)$")) or 1
   local speed = command.args.speed
 
@@ -169,32 +189,36 @@ function handler.handle_fan_speed(driver, device, command)
   log.info(string.format("[Handler] Fan speed %d requested for %s", speed, dni))
 
   if speed == 0 then
+    device:emit_event(capabilities.switch.switch.off())
+    device:emit_event(capabilities.fanSpeed.fanSpeed(0))
     safe_send(driver, protocol.build_fan_power(fan_id, false), protocol.ack_fan_off())
   else
+    device:emit_event(capabilities.switch.switch.on())
+    device:emit_event(capabilities.fanSpeed.fanSpeed(speed))
     safe_send(driver, protocol.build_fan_speed(fan_id, speed), protocol.ack_fan_speed())
   end
 end
 
 function handler.handle_thermostat_mode(driver, device, command)
-  local dni = device.device_network_id
+  local dni = get_effective_dni(device)
   local thermo_id = tonumber(dni:match("^commax:thermostat:(%d+)$")) or 1
   local mode = command.args.mode
   log.info(string.format("[Handler] Thermostat mode '%s' requested for %s", tostring(mode), dni))
 
   if mode == "heat" then
+    device:emit_event(capabilities.thermostatMode.thermostatMode.heat())
     safe_send(driver, protocol.build_thermostat_power(thermo_id, true), protocol.ack_thermostat_power(thermo_id, true))
   elseif mode == "off" then
+    device:emit_event(capabilities.thermostatMode.thermostatMode.off())
     safe_send(driver, protocol.build_thermostat_power(thermo_id, false), protocol.ack_thermostat_power(thermo_id, false))
   else
     -- Only heat/off are confirmed by the reference protocol (heaters_new.yaml).
-    -- Any other mode (e.g. "auto"/"cool") is not supported - ignore rather
-    -- than send an unconfirmed/guessed packet.
     log.warn(string.format("[Handler] Unsupported thermostat mode '%s' ignored for %s", tostring(mode), dni))
   end
 end
 
 function handler.handle_heating_setpoint(driver, device, command)
-  local dni = device.device_network_id
+  local dni = get_effective_dni(device)
   local thermo_id = tonumber(dni:match("^commax:thermostat:(%d+)$")) or 1
   local temp = command.args.setpoint
 
@@ -204,11 +228,13 @@ function handler.handle_heating_setpoint(driver, device, command)
   end
   log.info(string.format("[Handler] Heating setpoint %d requested for %s", temp, dni))
 
+  device:emit_event(capabilities.thermostatHeatingSetpoint.heatingSetpoint({ value = temp, unit = "C" }))
   safe_send(driver, protocol.build_thermostat_temperature(thermo_id, temp), protocol.ack_thermostat_temperature(thermo_id))
 end
 
 function handler.handle_valve_close(driver, device, command)
   log.info("[Handler] Gas valve CLOSE requested")
+  device:emit_event(capabilities.valve.valve.closed())
   safe_send(driver, protocol.build_gas_close(), protocol.ack_gas_close())
 end
 
@@ -217,12 +243,7 @@ function handler.handle_valve_open(driver, device, command)
   device:emit_event(capabilities.valve.valve.closed())
 end
 
---- Elevator down-call is a momentary button. CONFIRMED 2026-09-17 by real
---- capture: the physical trigger (a separate RS485-to-Matter bridge on the
---- same bus) sends the exact same command packet TWICE, ~12ms apart, each
---- separately ACKed, for a single logical call - not once. Enqueue it
---- repeat_cnt times (default 2, configurable via elevatorCallCount preference)
---- without confusing this with ordinary command ACK retry counts.
+--- Elevator down-call is a momentary button.
 function handler.handle_elevator_call_down(driver, device, command)
   log.info("[Handler] Elevator down-call requested")
   local packet = protocol.build_elevator_call_down()
@@ -239,18 +260,16 @@ function handler.handle_elevator_call_down(driver, device, command)
 end
 
 function handler.handle_refresh(driver, device, command)
-  local dni = device.device_network_id
+  local dni = get_effective_dni(device)
   log.info(string.format("[Handler] Refresh requested for %s", dni))
   
   if dni:match("^commax:light:(%d+)$") then
-    -- Confirmed by real EW11 capture 2026-09-16 (see commax_protocol.lua).
     local light_id = tonumber(dni:match("^commax:light:(%d+)$"))
     safe_send(driver, protocol.build_light_query(light_id))
   elseif dni:match("^commax:thermostat:(%d+)$") then
     local thermo_id = tonumber(dni:match("^commax:thermostat:(%d+)$"))
     safe_send(driver, protocol.build_thermostat_query(thermo_id))
   elseif dni:match("^commax:outlet:(%d+)$") then
-    -- Confirmed by real EW11 capture 2026-09-17 (see commax_protocol.lua).
     local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
     safe_send(driver, protocol.build_outlet_query(outlet_id))
   elseif dni == "commax-bridge" then

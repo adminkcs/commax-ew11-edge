@@ -1,5 +1,6 @@
 local Driver = require("st.driver")
 local capabilities = require("st.capabilities")
+local socket = require("cosock.socket")
 local log = require("log")
 local EW11 = require("ew11")
 local protocol = require("commax_protocol")
@@ -17,10 +18,7 @@ function commax_driver:get_device_by_dni(dni)
   return nil
 end
 
---- Create a single child device, isolated from failures in sibling
---- creations. If try_create_device throws (e.g. a transient cloud API
---- error) or returns an error, log and continue - one failed device must
---- not stop the remaining lights/heaters/fan/gas from being created.
+--- Create a single child device with rate limiting to prevent SmartThings cloud API drops
 local function safe_create_device(self, spec)
   if spec.type == "EDGE_CHILD" and not spec.parent_assigned_child_key then
     spec.parent_assigned_child_key = spec.device_network_id
@@ -29,6 +27,8 @@ local function safe_create_device(self, spec)
   if not ok then
     log.error(string.format("[Init] Failed to create device %s: %s", spec.device_network_id or spec.parent_assigned_child_key, tostring(err)))
   end
+  -- Brief yield to prevent SmartThings cloud RPC flooding when creating multiple child devices
+  pcall(function() socket.sleep(0.05) end)
 end
 
 --- Create Child Devices according to Bridge Preferences
@@ -280,6 +280,26 @@ local function device_init(driver, device)
           log.error(string.format("[Init] Heater polling tick failed (recovered): %s", tostring(err2)))
         end
       end, "HeaterStatusPolling")
+    end
+  else
+    -- Initialize Child Device baseline capability events so SmartThings UI does not show "all ON" or "unknown"
+    local dni = device.parent_assigned_child_key or device.device_network_id or ""
+    if dni:match("^commax:light:") then
+      pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
+    elseif dni:match("^commax:outlet:") then
+      pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
+    elseif dni:match("^commax:fan:") then
+      pcall(function()
+        device:emit_event(capabilities.switch.switch.off())
+        device:emit_event(capabilities.fanSpeed.fanSpeed(0))
+      end)
+    elseif dni:match("^commax:thermostat:") then
+      pcall(function()
+        device:emit_event(capabilities.thermostatMode.thermostatMode.off())
+        device:emit_event(capabilities.thermostatOperatingState.thermostatOperatingState.idle())
+      end)
+    elseif dni == "commax:gas:1" then
+      pcall(function() device:emit_event(capabilities.valve.valve.closed()) end)
     end
   end
 end
