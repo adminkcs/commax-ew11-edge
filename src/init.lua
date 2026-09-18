@@ -69,6 +69,10 @@ function commax_driver:sync_child_devices(bridge_device)
         device_network_id = dni
       })
     end
+    -- Query hardware for real light state
+    if self.ew11 then
+      self.ew11:send(protocol.build_light_query(i))
+    end
   end
 
   -- 2. Create Thermostats
@@ -210,9 +214,17 @@ function commax_driver:poll_all_devices()
   if not self.ew11 then return end
   local bridge = self:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
-  local heater_count = math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4))
+
+  -- Query lights sequentially
+  local enable_light = (prefs.enableLight ~= false)
+  local light_count = enable_light and math.max(0, math.min(9, tonumber(prefs.lightCount) or 4)) or 0
+  for i = 1, light_count do
+    self.ew11:send(protocol.build_light_query(i))
+  end
 
   -- Query heaters sequentially
+  local enable_heating = (prefs.enableHeating ~= false)
+  local heater_count = enable_heating and math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4)) or 0
   for i = 1, heater_count do
     self.ew11:send(protocol.build_thermostat_query(i))
   end
@@ -284,8 +296,13 @@ local function device_init(driver, device)
   else
     -- Initialize Child Device baseline capability events so SmartThings UI does not show "all ON" or "unknown"
     local dni = device.parent_assigned_child_key or device.device_network_id or ""
-    if dni:match("^commax:light:") then
-      pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
+    local light_id = dni:match("^commax:light:(%d+)$")
+    if light_id then
+      if driver.ew11 then
+        driver.ew11:send(protocol.build_light_query(tonumber(light_id)))
+      else
+        pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
+      end
     elseif dni:match("^commax:outlet:") then
       pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
     elseif dni:match("^commax:fan:") then

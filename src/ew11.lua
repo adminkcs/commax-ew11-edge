@@ -141,9 +141,7 @@ function EW11:send(raw_packet, ack_prefix)
     log.error("[EW11] send() rejected: not a valid 8-byte packet")
     return
   end
-  -- Command flooding (e.g. an automation hammering ON/OFF) must not grow
-  -- the queue without bound. Drop the oldest queued command rather than the
-  -- newest - the newest reflects the user's latest intent.
+  -- Command flooding must not grow the queue without bound.
   if #self.tx_queue >= MAX_TX_QUEUE then
     log.warn(string.format("[EW11] TX queue full (%d), dropping oldest queued command", MAX_TX_QUEUE))
     table.remove(self.tx_queue, 1)
@@ -152,15 +150,14 @@ function EW11:send(raw_packet, ack_prefix)
     packet = raw_packet,
     ack_prefix = ack_prefix,
     attempts_left = self.tx_retry_cnt,
+    enqueued_at = socket.gettime(),
   })
+  log.info(string.format("[TX] command requested: %s (ack=%s, queue_depth=%d)",
+    protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.tx_queue))
 end
 
 --- Write a packet to the socket immediately (used internally by the queue).
---- Captures self.sock into a local before use: _connection_loop runs as a
---- separate coroutine and can nil out self.sock (on disconnect) at any
---- yield point, so re-reading self.sock mid-function could hand us nil
---- between the guard check and the send call.
-function EW11:_write(raw_packet)
+function EW11:_write(raw_packet, is_retry)
   local sock = self.sock
   if not sock then
     log.warn("[EW11] Send failed: socket not connected")
@@ -175,38 +172,31 @@ function EW11:_write(raw_packet)
     log.error(string.format("[EW11] Send error: %s", tostring(err)))
     return false
   end
-  log.debug(string.format("[EW11] TX -> %s", protocol.to_hex(raw_packet)))
+  log.info(string.format("[TX] sending packet: %s (retry=%s)", protocol.to_hex(raw_packet), tostring(is_retry == true)))
   return true
 end
 
---- RS485 is half-duplex and shared with the wallpad's own periodic status
---- broadcasts - writing while the bus just carried traffic risks colliding
---- with it. Cross-checked against kimtc99/HAaddons (CommaxWallpadBySaram
---- main.py), which withholds sends for 100ms after the last received byte
---- for the same reason; we apply the same idle-bus guard here.
-local BUS_IDLE_GUARD = 0.1
+--- RS485 is half-duplex. 8 bytes at 9600 baud takes 8.33ms.
+--- BUS_IDLE_GUARD is set to 20ms (0.02s) to prevent on-wire collision without
+--- starving the TX queue under continuous RX traffic (where packet intervals avg 55ms).
+--- MAX_BUS_WAIT (300ms) guarantees that user commands are never starved permanently.
+local BUS_IDLE_GUARD = 0.02
+local MAX_BUS_WAIT = 0.3
 
 function EW11:_bus_busy()
   return self.last_rx_time ~= nil and (socket.gettime() - self.last_rx_time) < BUS_IDLE_GUARD
 end
 
---- One iteration of the TX queue: separated out so _tx_queue_loop can wrap
---- it in pcall without an error inside ever killing the whole coroutine
---- (which would silently stop ALL future commands from being sent).
+--- One iteration of the TX queue
 function EW11:_tx_queue_tick()
-  if self:_bus_busy() then
-    -- Something was just received on the bus - let it settle before we
-    -- transmit, rather than risk colliding with in-flight RS485 traffic.
-    return
-  end
+  local now = socket.gettime()
 
   if self.pending then
-    local elapsed = socket.gettime() - self.pending.sent_at
+    local elapsed = now - self.pending.sent_at
     if elapsed >= self.tx_timeout then
       if not self.sock then
-        -- Disconnected: don't burn retry attempts while there is no
-        -- connection to send on. Just keep waiting for reconnection.
-        self.pending.sent_at = socket.gettime()
+        -- Disconnected: wait for reconnection
+        self.pending.sent_at = now
         return
       end
       self.pending.attempts_left = self.pending.attempts_left - 1
@@ -219,25 +209,35 @@ function EW11:_tx_queue_tick()
         log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
           self.tx_timeout, self.pending.attempts_left))
         socket.sleep(self.tx_delay)
-        self:_write(self.pending.packet)
+        self:_write(self.pending.packet, true)
         self.pending.sent_at = socket.gettime()
       end
     end
   elseif #self.tx_queue > 0 then
-    local job = table.remove(self.tx_queue, 1)
-    if self:_write(job.packet) then
+    local job = self.tx_queue[1]
+    local wait_time = now - (job.enqueued_at or now)
+
+    -- Guard against continuous RX traffic starvation: if queued for >= MAX_BUS_WAIT, force send
+    if self:_bus_busy() and wait_time < MAX_BUS_WAIT then
+      -- Let the bus settle briefly
+      return
+    end
+
+    if wait_time >= MAX_BUS_WAIT and self:_bus_busy() then
+      log.info(string.format("[TX] Bus busy over %.3fs (starvation guard), force transmitting %s", wait_time, protocol.to_hex(job.packet)))
+    end
+
+    table.remove(self.tx_queue, 1)
+    if self:_write(job.packet, false) then
       if job.ack_prefix then
         job.sent_at = socket.gettime()
         self.pending = job
       end
-      -- no ack_prefix: fire-and-forget, queue advances immediately
     end
   end
 end
 
---- Serialize and retry command packets, mirroring the reference bridge's
---- command.manager.ts: one in-flight command at a time, ACK-confirmed,
---- retried on timeout, silently given up on exhaustion.
+--- Serialize and retry command packets
 function EW11:_tx_queue_loop()
   while self.running do
     local ok, err = pcall(function() self:_tx_queue_tick() end)
@@ -249,15 +249,14 @@ function EW11:_tx_queue_loop()
   end
 end
 
---- Check whether a validly-parsed RX packet satisfies the currently pending
---- command's ACK, and if so clear it so the queue can advance.
+--- Check whether a validly-parsed RX packet satisfies the currently pending command's ACK
 function EW11:_check_ack(raw_bytes)
   if not self.pending or not self.pending.ack_prefix then return end
   local prefix = self.pending.ack_prefix
   for i = 1, #prefix do
     if string.byte(raw_bytes, i) ~= prefix[i] then return end
   end
-  log.debug(string.format("[EW11] ACK matched for %s", protocol.to_hex(self.pending.packet)))
+  log.info(string.format("[ACK] matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
   self.pending = nil
 end
 
@@ -359,7 +358,7 @@ function EW11:_process_buffer()
 
     if parse_ok and parsed then
       -- Valid packet recognized and checksum verified
-      log.debug(string.format("[EW11] RX Valid <- %s", protocol.to_hex(candidate)))
+      log.info(string.format("[RX] packet bytes: %s", protocol.to_hex(candidate)))
       self:_check_ack(candidate)
       if self.on_packet_cb then
         -- Isolate the device-state callback: if it errors (e.g. a bad
