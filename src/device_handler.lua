@@ -277,4 +277,27 @@ function handler.handle_refresh(driver, device, command)
   end
 end
 
+--- Called by EW11 when a command fails after all ACK retries are exhausted.
+--- Instead of guessing the device state, query hardware for the real state
+--- so SmartThings UI reconciles with reality (the command might have partially
+--- succeeded - the ACK could have been lost while the relay actually toggled).
+function handler.handle_command_failed(driver, raw_packet, ack_prefix)
+  if type(raw_packet) ~= "string" or #raw_packet < 2 then return end
+  local header = string.byte(raw_packet, 1)
+  local id = string.byte(raw_packet, 2)
+
+  if header == protocol.CMD_LIGHT then
+    log.warn(string.format("[Handler] Light %d command failed, querying real state", id))
+    safe_send(driver, protocol.build_light_query(id))
+  elseif header == protocol.CMD_OUTLET then
+    log.warn(string.format("[Handler] Outlet %d command failed, querying real state", id))
+    safe_send(driver, protocol.build_outlet_query(id))
+  elseif header == protocol.CMD_THERMO then
+    log.warn(string.format("[Handler] Thermostat %d command failed, querying real state", id))
+    safe_send(driver, protocol.build_thermostat_query(id))
+  else
+    log.warn(string.format("[Handler] Command 0x%02X failed, no auto-recovery query available", header))
+  end
+end
+
 return handler

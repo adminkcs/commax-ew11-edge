@@ -270,7 +270,9 @@ local function device_init(driver, device)
       if not driver.ew11 then
         driver.ew11 = EW11.new(driver, ip, port, function(parsed)
           handler.handle_parsed_packet(driver, parsed)
-        end, config)
+        end, config, function(raw_packet, ack_prefix)
+          handler.handle_command_failed(driver, raw_packet, ack_prefix)
+        end)
         driver.ew11:start()
       else
         driver.ew11:update_config(ip, port, config)
@@ -346,6 +348,25 @@ local function device_info_changed(driver, device, event, args)
     local ok, err = pcall(function() driver:sync_child_devices(device) end)
     if not ok then
       log.error(string.format("[Init] sync_child_devices failed: %s", tostring(err)))
+    end
+
+    -- Re-register polling timer if refreshTime changed
+    local old_interval = tonumber(old_prefs.refreshTime) or tonumber(old_prefs.pollInterval) or 10
+    local new_interval = tonumber(prefs.refreshTime) or tonumber(prefs.pollInterval) or 10
+    if old_interval ~= new_interval then
+      log.info(string.format("[Init] Polling interval changed: %ds -> %ds, rescheduling", old_interval, new_interval))
+      -- Cancel existing schedule (SmartThings Edge SDK: cancel by name)
+      pcall(function() driver:cancel_timer("HeaterStatusPolling") end)
+      driver._heater_poll_scheduled = false
+      if new_interval > 0 then
+        driver._heater_poll_scheduled = true
+        driver:call_on_schedule(new_interval, function()
+          local ok2, err2 = pcall(function() driver:poll_all_devices() end)
+          if not ok2 then
+            log.error(string.format("[Init] Polling tick failed (recovered): %s", tostring(err2)))
+          end
+        end, "HeaterStatusPolling")
+      end
     end
   end
 end

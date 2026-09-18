@@ -261,4 +261,163 @@ do
     "(code-logic verified only; whether 10ms is adequate on real hardware/network needs live-environment testing)")
 end
 
+-- 8. Disconnect resilience: queued commands must NOT be drained when socket is nil
+do
+  local current_time = 1000.0
+  local old_gettime = socket.gettime
+  socket.gettime = function() return current_time end
+
+  local ew11 = EW11.new({ call_with_delay = function() end }, "192.168.1.100", 8899, function() end, {
+    tx_delay_ms = 10,
+    ack_timeout_ms = 100,
+    tx_retry_cnt = 2,
+  })
+  -- Deliberately leave sock = nil (disconnected state)
+  ew11.sock = nil
+
+  local cmd1 = hex_to_bin("31 01 01 00 00 00 00 33")
+  local cmd2 = hex_to_bin("31 02 01 00 00 00 00 34")
+  ew11:send(cmd1, { 0xB1, 0x01, 0x01 })
+  ew11:send(cmd2, { 0xB1, 0x01, 0x02 })
+  assert(#ew11.tx_queue == 2, "Two commands must be queued")
+
+  -- Tick multiple times while disconnected
+  for _ = 1, 10 do
+    current_time = current_time + 0.05
+    ew11:_tx_queue_tick()
+  end
+
+  -- Commands must still be in queue, not drained
+  assert(#ew11.tx_queue == 2,
+    "Commands must be preserved in queue during disconnect, not silently drained")
+
+  -- Now reconnect and verify the commands can be dispatched
+  local fake_sock = make_fake_sock()
+  ew11.sock = fake_sock
+  current_time = current_time + 0.05
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 1, "First command must be sent after reconnection")
+  assert(#ew11.tx_queue == 1, "Second command must still be in queue")
+
+  socket.gettime = old_gettime
+  print("[PASS] Disconnect resilience: commands are preserved in queue, not drained while socket is nil")
+end
+
+-- 9. 3-byte ACK prefix matching: Light 2 ACK must NOT clear pending Light 1 command
+do
+  local current_time = 1000.0
+  local old_gettime = socket.gettime
+  socket.gettime = function() return current_time end
+
+  local fake_sock = make_fake_sock()
+  local ew11 = EW11.new({ call_with_delay = function() end }, "192.168.1.100", 8899, function() end, {
+    tx_delay_ms = 10,
+    ack_timeout_ms = 200,
+  })
+  ew11.sock = fake_sock
+
+  -- Send Light 1 ON command with full 3-byte ACK prefix
+  local cmd = hex_to_bin("31 01 01 00 00 00 00 33")
+  ew11:send(cmd, protocol.ack_light_command(1, true))  -- {0xB1, 0x01, 0x01}
+
+  -- Dispatch it
+  current_time = current_time + 0.05
+  ew11:_tx_queue_tick()
+  assert(ew11.pending ~= nil, "Command must be pending awaiting ACK")
+
+  -- Receive ACK for Light 2 ON (different ID) - should NOT match
+  local wrong_ack = hex_to_bin("B1 01 02 00 00 00 00 B4")
+  ew11:_check_ack(wrong_ack)
+  assert(ew11.pending ~= nil, "Light 2 ACK must NOT clear pending Light 1 command (3-byte prefix mismatch)")
+
+  -- Receive correct ACK for Light 1 ON - should match
+  local right_ack = hex_to_bin("B1 01 01 00 00 00 00 B3")
+  ew11:_check_ack(right_ack)
+  assert(ew11.pending == nil, "Light 1 ACK must clear pending Light 1 command (3-byte prefix match)")
+
+  socket.gettime = old_gettime
+  print("[PASS] 3-byte ACK prefix: Light 2 ACK does NOT clear pending Light 1 command")
+end
+
+-- 10. on_fail_cb is called when ACK retries exhausted
+do
+  local current_time = 1000.0
+  local old_gettime = socket.gettime
+  socket.gettime = function() return current_time end
+
+  local fail_calls = {}
+  local fake_sock = make_fake_sock()
+  local ew11 = EW11.new({ call_with_delay = function() end }, "192.168.1.100", 8899, function() end, {
+    tx_delay_ms = 10,
+    ack_timeout_ms = 100,
+    tx_retry_cnt = 1,  -- only 1 retry = 2 total attempts
+  }, function(raw_packet, ack_prefix)
+    table.insert(fail_calls, { packet = raw_packet, ack = ack_prefix })
+  end)
+  ew11.sock = fake_sock
+
+  local cmd = hex_to_bin("31 01 01 00 00 00 00 33")
+  ew11:send(cmd, protocol.ack_light_command(1, true))
+
+  -- Dispatch command
+  current_time = current_time + 0.05
+  ew11:_tx_queue_tick()
+  assert(ew11.pending ~= nil, "Command must be pending")
+  assert(#fail_calls == 0, "No failure yet")
+
+  -- First timeout -> retry
+  current_time = current_time + 0.2
+  ew11:_tx_queue_tick()
+  assert(ew11.pending ~= nil, "Still pending after first retry")
+
+  -- Second timeout -> exhausted, should call on_fail_cb
+  current_time = current_time + 0.2
+  ew11:_tx_queue_tick()
+  assert(ew11.pending == nil, "Pending must be cleared after all retries exhausted")
+  assert(#fail_calls == 1, "on_fail_cb must be called exactly once")
+  assert(fail_calls[1].packet == cmd, "on_fail_cb must receive the failed packet")
+
+  socket.gettime = old_gettime
+  print("[PASS] on_fail_cb: callback fires when ACK retries are exhausted")
+end
+
+-- 11. ACK retry respects bus busy guard
+do
+  local current_time = 1000.0
+  local old_gettime = socket.gettime
+  socket.gettime = function() return current_time end
+
+  local fake_sock = make_fake_sock()
+  local ew11 = EW11.new({ call_with_delay = function() end }, "192.168.1.100", 8899, function() end, {
+    tx_delay_ms = 10,
+    ack_timeout_ms = 100,
+    tx_retry_cnt = 2,
+  })
+  ew11.sock = fake_sock
+
+  local cmd = hex_to_bin("31 01 01 00 00 00 00 33")
+  ew11:send(cmd, protocol.ack_light_command(1, true))
+
+  -- Dispatch command
+  current_time = current_time + 0.05
+  ew11:_tx_queue_tick()
+  local initial_sent = #fake_sock.sent
+  assert(ew11.pending ~= nil, "Command must be pending")
+
+  -- Timeout, but bus is busy (RX 5ms ago)
+  current_time = current_time + 0.2
+  ew11.last_rx_time = current_time - 0.005  -- 5ms ago = bus busy
+  local attempts_before = ew11.pending.attempts_left
+  ew11:_tx_queue_tick()
+
+  -- Retry must be deferred, not fired
+  assert(#fake_sock.sent == initial_sent,
+    "ACK retry must be deferred when bus is busy, not cause RS485 collision")
+  assert(ew11.pending.attempts_left == attempts_before,
+    "Retry attempt must not be burned while bus is busy")
+
+  socket.gettime = old_gettime
+  print("[PASS] ACK retry bus guard: retry is deferred when bus is busy")
+end
+
 print("=== All EW11 TX Queue / ACK / Disconnect / rx_timeout Tests Passed Successfully! ===")

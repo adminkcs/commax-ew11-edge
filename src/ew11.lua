@@ -16,7 +16,7 @@ EW11.__index = EW11
 local DEFAULT_TX_RETRY_CNT = 5
 local DEFAULT_TX_TIMEOUT = 0.2
 local DEFAULT_TX_DELAY = 0.01
-local DEFAULT_RX_TIMEOUT = 0.01
+local DEFAULT_RX_TIMEOUT = 0.05
 
 -- Defensive bounds (not from the reference source - added because a
 -- long-running driver must survive garbage data / command floods without
@@ -56,12 +56,13 @@ local function parse_timing_config(config)
   return retry, tx_timeout_s, tx_delay_s, rx_timeout_s
 end
 
-function EW11.new(driver, ip, port, on_packet_cb, config)
+function EW11.new(driver, ip, port, on_packet_cb, config, on_fail_cb)
   local self = setmetatable({}, EW11)
   self.driver = driver
   self.ip = ip
   self.port = tonumber(port) or 8899
   self.on_packet_cb = on_packet_cb
+  self.on_fail_cb = on_fail_cb  -- called with (raw_packet, ack_prefix) on ACK exhaustion
   self.sock = nil
   self.running = false
   self.buffer = ""
@@ -199,11 +200,25 @@ function EW11:_tx_queue_tick()
         self.pending.sent_at = now
         return
       end
+      -- Wait for bus to be idle before retrying to avoid RS485 collision.
+      -- Check this BEFORE decrementing attempts_left so we don't burn a
+      -- retry just because the bus happened to be busy at timeout time.
+      if self:_bus_busy() then
+        self.pending.sent_at = now
+        return
+      end
       self.pending.attempts_left = self.pending.attempts_left - 1
       if self.pending.attempts_left < 0 then
         log.warn(string.format(
           "[EW11] Command failed: no ACK after %d attempt(s) -> %s",
           self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
+        -- Notify caller so it can roll back optimistic UI state
+        if self.on_fail_cb then
+          local cb_ok, cb_err = pcall(self.on_fail_cb, self.pending.packet, self.pending.ack_prefix)
+          if not cb_ok then
+            log.error(string.format("[EW11] on_fail_cb error (recovered): %s", tostring(cb_err)))
+          end
+        end
         self.pending = nil
       else
         log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
@@ -214,6 +229,9 @@ function EW11:_tx_queue_tick()
       end
     end
   elseif #self.tx_queue > 0 then
+    -- Don't dequeue if socket is not connected - preserve commands until reconnection
+    if not self.sock then return end
+
     local job = self.tx_queue[1]
     local wait_time = now - (job.enqueued_at or now)
 
