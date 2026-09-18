@@ -294,9 +294,11 @@ local function device_removed(driver, device)
 end
 
 local function discovery_handler(driver, opts, should_continue)
-  log.info("[Discovery] Starting discovery for Commax Bridge...")
-  if not driver:get_device_by_dni("commax-bridge") then
-    log.info("[Discovery] Creating Commax Bridge device...")
+  log.info("[Discovery] START")
+  local existing = driver:get_device_by_dni("commax-bridge")
+  log.info(string.format("[Discovery] Existing device: %s", tostring(existing ~= nil)))
+  if not existing then
+    log.info("[Discovery] Creating device: commax-bridge")
     local ok, err = pcall(function()
       return driver:try_create_device({
         type = "LAN",
@@ -308,13 +310,14 @@ local function discovery_handler(driver, opts, should_continue)
       })
     end)
     if not ok then
-      log.error(string.format("[Discovery] Failed to create bridge device: %s", tostring(err)))
+      log.error(string.format("[Discovery] ERROR: %s", tostring(err)))
     else
-      log.info("[Discovery] Bridge device creation requested successfully")
+      log.info(string.format("[Discovery] try_create_device result: %s", tostring(ok)))
     end
   else
-    log.info("[Discovery] Bridge device already exists, skipping creation")
+    log.info("[Discovery] Existing device found, skipping creation")
   end
+  log.info("[Discovery] END")
 end
 
 -- =========================================================================

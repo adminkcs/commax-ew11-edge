@@ -1,5 +1,6 @@
 name: "Commax Wallpad EW11 Driver"
-packageKey: "com.commax.wallpad.ew11"
+packageKey: "com.commax.wallpad.ew11.bridge"
 description: "SmartThings Edge Driver for Commax Wallpad via EW11 RS485-TCP Bridge"
 permissions:
   lan: {}
+  discovery: {}
