@@ -284,14 +284,15 @@ function handler.handle_elevator_call(driver, device, command)
   end
 
   local packet = protocol.build_elevator_call_down()
+  local ack = protocol.ack_elevator_call_down()
 
   local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
-  local repeat_cnt = math.max(1, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
+  local repeat_cnt = math.max(2, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
 
-  log.info(string.format("[Handler] Transmitting %d elevator down-call packet(s) burst (no ACK blocking)", repeat_cnt))
+  log.info(string.format("[Handler] Transmitting %d elevator down-call packet(s) with ACK verification", repeat_cnt))
   for _ = 1, repeat_cnt do
-    safe_send(driver, packet, nil)
+    safe_send(driver, packet, ack)
   end
 
   -- Fallback auto-reset to standby after 10s if wallpad 0x23 packets don't take over
