@@ -220,11 +220,11 @@ function EW11:_write(raw_packet, is_retry)
 end
 
 --- RS485 is half-duplex. 8 bytes at 9600 baud takes 8.33ms.
---- BUS_IDLE_GUARD is set to 15ms (0.015s) to avoid on-wire collision while allowing
---- transmission in brief pauses between continuous RX traffic (where packet intervals avg 30-55ms).
---- MAX_BUS_WAIT (200ms) guarantees that user commands are never starved permanently.
-local BUS_IDLE_GUARD = 0.015
-local MAX_BUS_WAIT = 0.2
+--- BUS_IDLE_GUARD is set to 20ms (0.02s) to prevent on-wire collision without
+--- starving the TX queue under continuous RX traffic (where packet intervals avg 55ms).
+--- MAX_BUS_WAIT (300ms) guarantees that user commands are never starved permanently.
+local BUS_IDLE_GUARD = 0.02
+local MAX_BUS_WAIT = 0.3
 
 function EW11:_bus_busy()
   return self.last_rx_time ~= nil and (socket.gettime() - self.last_rx_time) < BUS_IDLE_GUARD
@@ -242,9 +242,15 @@ function EW11:_tx_queue_tick()
         self.pending.sent_at = now
         return
       end
-
-      -- If attempts are already exhausted, fail immediately without waiting for bus
-      if self.pending.attempts_left <= 0 then
+      -- Wait for bus to be idle before retrying to avoid RS485 collision.
+      -- Check this BEFORE decrementing attempts_left so we don't burn a
+      -- retry just because the bus happened to be busy at timeout time.
+      if self:_bus_busy() then
+        self.pending.sent_at = now
+        return
+      end
+      self.pending.attempts_left = self.pending.attempts_left - 1
+      if self.pending.attempts_left < 0 then
         log.warn(string.format(
           "[EW11] Command failed: no ACK after %d attempt(s) -> %s",
           self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
@@ -256,33 +262,13 @@ function EW11:_tx_queue_tick()
           end
         end
         self.pending = nil
-        return
+      else
+        log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
+          self.tx_timeout, self.pending.attempts_left))
+        socket.sleep(self.tx_delay)
+        self:_write(self.pending.packet, true)
+        self.pending.sent_at = socket.gettime()
       end
-
-      -- Guard against continuous RX traffic starvation on retry:
-      -- Wait for bus to be idle before retrying, but don't starve indefinitely
-      if not self.pending.retry_wait_start then
-        self.pending.retry_wait_start = now
-      end
-      local retry_wait = now - self.pending.retry_wait_start
-
-      if self:_bus_busy() and retry_wait < MAX_BUS_WAIT then
-        -- Bus is busy, defer retry briefly without burning an attempt
-        return
-      end
-
-      if retry_wait >= MAX_BUS_WAIT and self:_bus_busy() then
-        log.info(string.format("[TX] Bus busy over %.3fs (retry starvation guard), force retrying %s",
-          retry_wait, protocol.to_hex(self.pending.packet)))
-      end
-
-      self.pending.attempts_left = self.pending.attempts_left - 1
-      self.pending.retry_wait_start = nil
-      log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
-        self.tx_timeout, self.pending.attempts_left))
-      socket.sleep(self.tx_delay)
-      self:_write(self.pending.packet, true)
-      self.pending.sent_at = socket.gettime()
     end
   else
     -- tx_queue (user-issued commands) always drains completely before
