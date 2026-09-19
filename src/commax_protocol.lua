@@ -110,23 +110,38 @@ local protocol = {
   GAS_CLOSED       = 0x50,
 
   -- Air quality sensors (read-only, passively broadcast - no commands).
-  -- CONFIRMED 2026-09-17 by real EW11 capture, matched live against the
-  -- wallpad's own display: "C8 31 01 13 13 00 01 21" arrived while the
-  -- wallpad showed PM2.5=1 and "C8 3F 01 13 13 00 01 2F" while it showed
-  -- PM10=1, and "F7 82 01 00 1A 13 13 BA" arrived while it showed CO2=1313
-  -- - then tracked live as CO2 fell (1313 -> 1235 -> 1223 -> 1221) exactly
-  -- matching the same two trailing bytes each time. In all three, the
-  -- value is bytes 6-7 (1-based, i.e. the last 2 bytes before checksum)
-  -- decoded as one 2-byte BCD number (bcd.decode_word). This matches the
-  -- "index 5 length 2 decode bcd" field described in homenet2mqtt's
-  -- haatz_air_quality_sensors.yaml, except our unit's PM10 second-byte
-  -- (0x3F) differs from that doc's 0x39 - our real value is used here.
+  -- CO2: CONFIRMED 2026-09-17 by real EW11 capture, matched live against
+  -- the wallpad's own display: "F7 82 01 00 1A 13 13 BA" arrived while the
+  -- wallpad showed CO2=1313, then tracked live as CO2 fell
+  -- (1313 -> 1235 -> 1223 -> 1221) exactly matching the same two trailing
+  -- bytes each time. The value is bytes 6-7 (1-based, i.e. the last 2
+  -- bytes before checksum) decoded as one 2-byte BCD number
+  -- (bcd.decode_word).
+  --
+  -- Dust (PM2.5 / PM10): the sub-header bytes 0x31 / 0x3F previously coded
+  -- here (by analogy with homenet2mqtt's haatz_air_quality_sensors.yaml,
+  -- which uses 0x31 / 0x39) were NEVER actually observed in
+  -- tools/capture_20260917_175929.log - a full 45-minute real capture from
+  -- this project's own EW11 - which is why PM2.5/PM10 never showed up in
+  -- SmartThings despite CO2 working fine (0xF7 packets DO appear in that
+  -- log). What the log actually contains, 27 times, is header 0xC8 with
+  -- sub-byte 0x11 or 0x1F (never 0x31/0x3F), e.g.
+  -- "C8 11 01 04 88 00 01 67" / "C8 1F 01 04 88 00 01 75". Across all 27
+  -- occurrences, bytes 6-7 are constant ("00 01") while bytes 4-5 drift
+  -- slowly (04 83 .. 05 08) - the opposite of what the old code assumed -
+  -- so the real value field is bytes 4-5, not 6-7.
+  -- CORRECTED here to match that real capture. Still UNVERIFIED: which of
+  -- 0x11 / 0x1F is PM2.5 vs PM10 - both drifted almost identically over
+  -- the whole capture, so magnitude can't disambiguate them. Assigned by
+  -- analogy with the old (lower-byte=PM2.5, higher-byte=PM10) convention;
+  -- please confirm against the wallpad's own PM2.5/PM10 display and swap
+  -- DUST_PM25/DUST_PM10 below if backwards.
   HEAD_CO2         = 0xF7,
   CO2_SUB1         = 0x82,
   CO2_SUB2         = 0x01,
   HEAD_DUST        = 0xC8,
-  DUST_PM25        = 0x31,
-  DUST_PM10        = 0x3F,
+  DUST_PM25        = 0x11,
+  DUST_PM10        = 0x1F,
   DUST_SUB2        = 0x01,
 
   -- Outlet (콘센트): CONFIRMED 2026-09-17 by real command/ack/state
@@ -499,15 +514,16 @@ function protocol.parse_packet(raw_bytes)
       raw = raw_bytes
     }
 
-  -- 6. Dust Sensor: PM2.5 (0xC8 0x31 0x01 ...) / PM10 (0xC8 0x3F 0x01 ...)
-  -- Packet: [0xC8, sub, 0x01, ?, ?, PM_hi(BCD), PM_lo(BCD), CS]
-  -- CONFIRMED 2026-09-17 the same way as CO2 above.
+  -- 6. Dust Sensor: PM2.5 (0xC8 0x11 0x01 ...) / PM10 (0xC8 0x1F 0x01 ...)
+  -- Packet: [0xC8, sub, 0x01, PM_hi(BCD), PM_lo(BCD), 0x00, 0x01, CS]
+  -- CORRECTED 2026-09-19 against real capture (see DUST_PM25/DUST_PM10
+  -- comment above) - value moved from bytes 6-7 to bytes 4-5.
   elseif head == protocol.HEAD_DUST and b[3] == protocol.DUST_SUB2
       and (b[2] == protocol.DUST_PM25 or b[2] == protocol.DUST_PM10) then
     return {
       device_type = (b[2] == protocol.DUST_PM25) and "pm25" or "pm10",
       id = 1,
-      ug_m3 = bcd.decode_word(b[6], b[7]),
+      ug_m3 = bcd.decode_word(b[4], b[5]),
       raw = raw_bytes
     }
 

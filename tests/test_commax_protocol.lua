@@ -187,23 +187,25 @@ assert(res_co2 and res_co2.device_type == "co2", "Parse CO2 sensor packet")
 assert(res_co2.ppm == 1313, "CO2 should be 1313 ppm")
 print("[PASS] Parse CO2 Sensor (1313 ppm, real-capture-confirmed)")
 
--- PM2.5 Sensor: C8 31 01 13 13 00 01 21
--- CONFIRMED 2026-09-17 matched live against the wallpad showing PM2.5=1.
-local pm25_pkt = hex_to_bin("C8 31 01 13 13 00 01 21")
+-- PM2.5 Sensor: C8 11 01 04 88 00 01 67
+-- CORRECTED 2026-09-19: taken from tools/capture_20260917_175929.log, a
+-- real 45-minute EW11 capture that never contains the previously-coded
+-- 0x31/0x3F sub-headers at all, but does contain 0x11/0x1F 27 times with
+-- the value in bytes 4-5 (see commax_protocol.lua DUST_PM25 comment).
+local pm25_pkt = hex_to_bin("C8 11 01 04 88 00 01 67")
 local res_pm25, err_pm25 = protocol.parse_packet(pm25_pkt)
 assert(res_pm25 and res_pm25.device_type == "pm25", "Parse PM2.5 sensor packet")
-assert(res_pm25.ug_m3 == 1, "PM2.5 should be 1 ug/m3")
-print("[PASS] Parse PM2.5 Sensor (1 ug/m3, real-capture-confirmed)")
+assert(res_pm25.ug_m3 == 488, "PM2.5 should be 488 (BCD bytes 4-5)")
+print("[PASS] Parse PM2.5 Sensor (488, real-capture-corrected)")
 
--- PM10 Sensor: C8 3F 01 13 13 00 01 2F
--- CONFIRMED 2026-09-17 matched live against the wallpad showing PM10=1.
--- Note: our unit's second byte is 0x3F, not the 0x39 in homenet2mqtt's
--- haatz_air_quality_sensors.yaml - real capture overrides that doc value.
-local pm10_pkt = hex_to_bin("C8 3F 01 13 13 00 01 2F")
+-- PM10 Sensor: C8 1F 01 04 88 00 01 75
+-- CORRECTED 2026-09-19, see PM2.5 note above. PM2.5-vs-PM10 assignment
+-- between 0x11/0x1F is still unverified - see comment in commax_protocol.lua.
+local pm10_pkt = hex_to_bin("C8 1F 01 04 88 00 01 75")
 local res_pm10, err_pm10 = protocol.parse_packet(pm10_pkt)
 assert(res_pm10 and res_pm10.device_type == "pm10", "Parse PM10 sensor packet")
-assert(res_pm10.ug_m3 == 1, "PM10 should be 1 ug/m3")
-print("[PASS] Parse PM10 Sensor (1 ug/m3, real-capture-confirmed)")
+assert(res_pm10.ug_m3 == 488, "PM10 should be 488 (BCD bytes 4-5)")
+print("[PASS] Parse PM10 Sensor (488, real-capture-corrected)")
 
 -- Outlet State: F9 10 01 10 00 00 00 1A (OFF) / F9 11 01 10 00 00 00 1B (ON)
 -- CONFIRMED 2026-09-17 by real command/ack/state correlation on our bus.
