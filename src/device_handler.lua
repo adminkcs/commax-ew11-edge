@@ -290,14 +290,16 @@ function handler.handle_elevator_call(driver, device, command)
 
   local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
-  local burst_cnt = math.max(2, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
+  local call_cnt = tonumber(prefs.elevatorCallCount) or 2
+  if call_cnt < 1 then call_cnt = 1 end
+  if call_cnt > 5 then call_cnt = 5 end
 
-  -- Fallback auto-reset to standby after 10s if wallpad 0x23 packets don't take over
+  -- Fallback auto-reset to standby after 15s if wallpad 0x23 packets don't take over
   if handler._elevator_reset_timer and driver and driver.cancel_timer then
     driver:cancel_timer(handler._elevator_reset_timer)
   end
   if driver and driver.call_with_delay then
-    handler._elevator_reset_timer = driver:call_with_delay(10, function()
+    handler._elevator_reset_timer = driver:call_with_delay(15, function()
       handler._elevator_reset_timer = nil
       local dev = driver:get_device_by_dni("commax:elevator:1") or device
       if dev and dev.emit_event then
@@ -309,13 +311,16 @@ function handler.handle_elevator_call(driver, device, command)
 
   local opts = {
     tag = "elevator",
-    burst_count = burst_cnt,
-    burst_delay = 0.015, -- 15ms interval between burst packets
+    burst_count = call_cnt,     -- 반복 전송 횟수: 엘리베이터 호출 반복 전송 설정(elevatorCallCount) 준수 (기본 2회)
+    burst_delay = 0.015,        -- 재전송 지연시간: 모니터링 실측 결과 기반 15ms
+    retry_count = 0,            -- 총 전송 횟수를 설정(call_cnt)에 일치시키고 추가 폭풍 재전송 차단
+    ack_timeout = 1.0,          -- 응답 대기 시간: 모니터링 실측 결과 기반 1000ms (월패드 처리 지연 대응)
+    rx_timeout = 0.05,          -- 수신 버퍼 정리시간: 모니터링 실측 결과 기반 50ms
     on_ack = function()
       log.info("[ELEVATOR] Wallpad ACK received, call confirmed")
     end,
     on_fail = function()
-      log.warn("[ELEVATOR] Transmission failed after retries, reverting to standby")
+      log.warn("[ELEVATOR] Transmission completed without ACK confirmation, reverting to standby")
       if handler._elevator_reset_timer and driver and driver.cancel_timer then
         driver:cancel_timer(handler._elevator_reset_timer)
         handler._elevator_reset_timer = nil
@@ -327,7 +332,9 @@ function handler.handle_elevator_call(driver, device, command)
     end,
   }
 
-  log.info(string.format("[ELEVATOR] Enqueueing %d-packet atomic burst (15ms spacing) with ACK verification", burst_cnt))
+  log.info(string.format(
+    "[ELEVATOR] Enqueueing %d-packet call (delay=15ms, ack_wait=1000ms, rx_buf=50ms) per elevatorCallCount preference",
+    call_cnt))
   safe_send(driver, packet, ack, opts)
 end
 

@@ -178,7 +178,10 @@ function EW11:send(raw_packet, ack_prefix, opts)
   table.insert(self.tx_queue, {
     packet = raw_packet,
     ack_prefix = ack_prefix,
-    attempts_left = self.tx_retry_cnt,
+    attempts_left = (opts.retry_count ~= nil) and opts.retry_count or self.tx_retry_cnt,
+    ack_timeout = opts.ack_timeout or self.tx_timeout,
+    tx_delay = opts.tx_delay or self.tx_delay,
+    rx_timeout = opts.rx_timeout or self.rx_timeout,
     enqueued_at = socket.gettime(),
     burst_count = opts.burst_count,
     burst_delay = opts.burst_delay,
@@ -187,8 +190,10 @@ function EW11:send(raw_packet, ack_prefix, opts)
     on_fail = opts.on_fail,
   })
   if opts.tag == "elevator" then
-    log.info(string.format("[ELEVATOR] Command enqueued: %s (ack=%s, burst_count=%d, queue_depth=%d)",
-      protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), opts.burst_count or 1, #self.tx_queue))
+    log.info(string.format("[ELEVATOR] Command enqueued: %s (ack=%s, burst_count=%d, attempts=%d, ack_wait=%.3fs, queue_depth=%d)",
+      protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), opts.burst_count or 1,
+      (opts.retry_count ~= nil) and opts.retry_count or self.tx_retry_cnt,
+      opts.ack_timeout or self.tx_timeout, #self.tx_queue))
   else
     log.info(string.format("[TX] command requested: %s (ack=%s, queue_depth=%d)",
       protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.tx_queue))
@@ -275,7 +280,8 @@ function EW11:_tx_queue_tick()
 
   if self.pending then
     local elapsed = now - self.pending.sent_at
-    if elapsed >= self.tx_timeout then
+    local timeout = self.pending.ack_timeout or self.tx_timeout
+    if elapsed >= timeout then
       if not self.sock then
         -- Disconnected: wait for reconnection
         self.pending.sent_at = now
@@ -292,8 +298,8 @@ function EW11:_tx_queue_tick()
       if self.pending.attempts_left < 0 then
         if self.pending.tag == "elevator" then
           log.warn(string.format(
-            "[ELEVATOR] Command failed: no ACK after %d attempt(s) -> %s",
-            self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
+            "[ELEVATOR] Command completed without ACK (waited %.3fs, attempts exhausted) -> %s",
+            timeout, protocol.to_hex(self.pending.packet)))
         else
           log.warn(string.format(
             "[EW11] Command failed: no ACK after %d attempt(s) -> %s",
@@ -314,14 +320,15 @@ function EW11:_tx_queue_tick()
         end
         self.pending = nil
       else
+        local delay = self.pending.tx_delay or self.tx_delay
         if self.pending.tag == "elevator" then
-          log.info(string.format("[ELEVATOR] ACK timeout (%.3fs) -> retrying burst (%d attempts left)...",
-            self.tx_timeout, self.pending.attempts_left))
+          log.info(string.format("[ELEVATOR] ACK timeout (%.3fs) -> retrying burst (%d attempts left, delay=%.0fms)...",
+            timeout, self.pending.attempts_left, delay * 1000))
         else
           log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
-            self.tx_timeout, self.pending.attempts_left))
+            timeout, self.pending.attempts_left))
         end
-        socket.sleep(self.tx_delay)
+        socket.sleep(delay)
         if self.pending.burst_count and self.pending.burst_count > 1 then
           self:_write_burst(self.pending, true)
         else
@@ -449,7 +456,8 @@ function EW11:_connection_tick()
       -- packet-parser.ts's rx_timeout handling (default 10ms in the
       -- reference bridge config).
       local now = socket.gettime()
-      if #self.buffer > 0 and self.last_rx_time and (now - self.last_rx_time) > self.rx_timeout then
+      local effective_rx_timeout = (self.pending and self.pending.rx_timeout) or self.rx_timeout
+      if #self.buffer > 0 and self.last_rx_time and (now - self.last_rx_time) > effective_rx_timeout then
         log.debug("[EW11] rx_timeout exceeded, discarding stale partial buffer")
         self.buffer = ""
       end
