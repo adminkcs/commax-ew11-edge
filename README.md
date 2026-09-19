@@ -6,6 +6,20 @@
 
 ---
 
+### 📌 기기별 연동 및 안정화 상태
+
+| 기기군 | 프로필 / 식별자 | 주요 기능 / Capability | 안정화 상태 | 비고 |
+|---|---|---|:---:|---|
+| **조명 (Light)** | `commax-light` (ID 1~8) | 전원 ON/OFF, 개별/일괄 제어 | **안정화 완료** | 8개 전 조명 실측 패킷 검증 및 실사용 안정화 |
+| **콘센트 (Outlet)** | `commax-outlet` (ID 1~10) | 전원 ON/OFF (대기전력 차단 콘센트 제어) | **안정화 완료** | 10개 전 콘센트 실측 패킷 검증 및 실사용 안정화 |
+| **보일러 / 난방 (Thermostat)** | `commax-thermostat` (ID 1~4) | 희망온도 설정, 현재온도 측정, 모드(꺼짐/난방) 제어 | **안정화 완료** | 꺼짐/난방 2가지 모드만 노출하는 전용 커스텀 VID 적용 완료 |
+| **전열기 / 환기팬 (Fan)** | `commax-fan` (ID 1) | 전열교환기 환기팬 전원 ON/OFF, 풍량(1~3단) 조절 | **안정화 완료** | 전열(0x04) 기본 운전 모드 및 실시간 풍량 연동 안정화 |
+| **엘리베이터 (Elevator)** | `commax-elevator` | 엘리베이터 하강 호출 (Momentary) | 연동 지원 | RS485-Matter 브릿지 연동 (2회 연속 안전 전송) |
+| **가스밸브 (Gas)** | `commax-gas` (ID 1) | 밸브 상태 모니터링 및 원격 닫기 | 연동 지원 | 안전 규정에 따라 원격 닫기만 허용 (열기 불가) |
+| **공기질 센서 (Air Quality)** | `commax-airquality` | 실시간 CO2, 미세먼지(PM2.5/PM10) 모니터링 | 연동 지원 | 수신 전용 모니터링 |
+
+---
+
 ## 1. 전체 시스템 구조
 
 ```text
@@ -279,9 +293,9 @@ commax-ew11-edge/
 |---|---|---|
 | EW11 IP | (예시값, 실제 IP로 반드시 변경) | 실제 우리 집 EW11의 IP로 반드시 변경 |
 | EW11 Port | `8899` | EW11 웹 설정에서 지정한 TCP 포트와 일치해야 함 |
-| Number of Lights | 4 | 실제 조명 개수(1~9)로 설정 (이 집은 8) |
+| Number of Lights | 4 | 실제 조명 개수(0~8)로 설정 (이 집은 8) |
 | Number of Thermostats | 4 | 실제 난방 구역 수(0~9) (이 집은 4) |
-| Number of Outlets | 10 | 실제 콘센트 개수(0~12) (이 집은 10) |
+| Number of Outlets | 10 | 실제 콘센트 개수(0~10)로 설정 (이 집은 10) |
 | Enable Elevator Down-Call | true | 하강 호출 버튼(momentary), 상승은 미구현 |
 | Enable Ventilation Fan | true | |
 | Enable Gas Valve | true | 상태조회 + 닫기만 |
