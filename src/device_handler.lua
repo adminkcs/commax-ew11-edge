@@ -59,6 +59,11 @@ function handler.handle_parsed_packet(driver, parsed)
 
   -- 2. Thermostat Event
   elseif parsed.device_type == "thermostat" then
+    local has_supported = device.get_latest_state and device:get_latest_state("main", capabilities.thermostatMode.ID, capabilities.thermostatMode.supportedThermostatModes.NAME)
+    if not has_supported then
+      device:emit_event(capabilities.thermostatMode.supportedThermostatModes({ "off", "heat" }))
+    end
+
     if parsed.mode == "heat" then
       device:emit_event(capabilities.thermostatMode.thermostatMode.heat())
     else

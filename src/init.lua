@@ -327,6 +327,7 @@ local function device_init(driver, device)
       end)
     elseif dni:match("^commax:thermostat:") then
       pcall(function()
+        device:emit_event(capabilities.thermostatMode.supportedThermostatModes({ "off", "heat" }))
         device:emit_event(capabilities.thermostatMode.thermostatMode.off())
         device:emit_event(capabilities.thermostatOperatingState.thermostatOperatingState.idle())
       end)

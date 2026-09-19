@@ -14,3 +14,6 @@ components:
         version: 1
     categories:
       - name: Thermostat
+metadata:
+  vid: a37ca3bd-9aa3-3537-a8ee-cf44b2f1b24c
+  mnmn: SmartThingsCommunity
