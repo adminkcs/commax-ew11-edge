@@ -126,4 +126,71 @@ do
   print("[PASS] Bus idle guard: TX is withheld right after RX, allowed again once idle")
 end
 
+-- 7. Valid-checksum unrecognized packet must be consumed as 8 bytes,
+-- not byte-shifted. This tests the fix for the wallpad query packet
+-- (0x30, 0x02, 0x79, etc.) processing overhead: these are legitimate
+-- bus packets we don't need to parse, but they have valid checksums and
+-- should NOT trigger 8 iterations of 1-byte-shift resync.
+do
+  local received = {}
+  local ew11 = EW11.new({ call_with_delay = function() end }, "127.0.0.1", 8899, function(parsed)
+    table.insert(received, parsed)
+  end)
+  -- Light query packet (0x30): valid checksum, unrecognized header.
+  -- Followed immediately by a light state response (0xB0).
+  local query = hex_to_bin("30 01 00 00 00 00 00 31")  -- REQ_LIGHT id=1
+  local state = hex_to_bin("B0 01 01 00 00 00 00 B2")  -- STATE_LIGHT id=1 ON
+  ew11.buffer = query .. state
+  ew11:_process_buffer()
+
+  assert(#received == 1, "Only the B0 state packet should be reported (query consumed silently)")
+  assert(received[1].device_type == "light" and received[1].is_on == true and received[1].id == 1,
+    "B0 state packet must be parsed correctly after consuming the unrecognized 0x30 query")
+  assert(#ew11.buffer == 0, "Buffer must be fully drained")
+  print("[PASS] Valid-checksum unrecognized packet (0x30 query) consumed as 8 bytes, following B0 state parsed correctly")
+end
+
+-- 8. Multiple consecutive unrecognized-but-valid-checksum packets must all
+-- be consumed efficiently (no byte-shift cascade).
+do
+  local received = {}
+  local ew11 = EW11.new({ call_with_delay = function() end }, "127.0.0.1", 8899, function(parsed)
+    table.insert(received, parsed)
+  end)
+  -- Three unrecognized packets followed by one recognized packet:
+  -- 0x30 (light query) + 0x02 (thermo query) + 0x31 (light command) + 0xB0 (light state)
+  local q1 = hex_to_bin("30 01 00 00 00 00 00 31")  -- REQ_LIGHT
+  local q2 = hex_to_bin("02 01 00 00 00 00 00 03")  -- REQ_THERMO
+  local c1 = hex_to_bin("31 02 01 00 00 00 00 34")  -- CMD_LIGHT id=2 ON
+  local s1 = hex_to_bin("B0 01 02 00 00 00 00 B3")  -- STATE_LIGHT id=2 ON
+  ew11.buffer = q1 .. q2 .. c1 .. s1
+  ew11:_process_buffer()
+
+  assert(#received == 1, "Only the B0 state packet should be reported")
+  assert(received[1].id == 2 and received[1].is_on == true,
+    "Light 2 ON state must be parsed correctly after 3 unrecognized packets")
+  assert(#ew11.buffer == 0, "Buffer must be fully drained")
+  print("[PASS] Multiple unrecognized-but-valid-checksum packets consumed efficiently, no byte-shift cascade")
+end
+
+-- 9. Genuine garbage (invalid checksum) must still trigger 1-byte-shift
+-- resync, not be consumed as 8 bytes.
+do
+  local received = {}
+  local ew11 = EW11.new({ call_with_delay = function() end }, "127.0.0.1", 8899, function(parsed)
+    table.insert(received, parsed)
+  end)
+  -- 5 bytes of garbage (invalid checksum) followed by a valid light state.
+  -- The garbage bytes must be byte-shifted past, then the valid packet found.
+  local garbage = string.char(0xAA, 0xBB, 0xCC, 0xDD, 0xEE)
+  local valid = hex_to_bin("B0 00 03 00 00 00 00 B3")  -- STATE_LIGHT id=3 OFF
+  ew11.buffer = garbage .. valid
+  ew11:_process_buffer()
+
+  assert(#received == 1, "Valid packet must still be found after garbage via byte-shift resync")
+  assert(received[1].device_type == "light" and received[1].id == 3 and received[1].is_on == false,
+    "Light 3 OFF state must be parsed correctly after garbage resync")
+  print("[PASS] Invalid-checksum garbage still triggers byte-shift resync correctly")
+end
+
 print("=== All EW11 Buffer/Framing Tests Passed Successfully! ===")

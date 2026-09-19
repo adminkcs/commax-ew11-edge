@@ -228,6 +228,13 @@ function commax_driver:poll_all_devices()
   for i = 1, heater_count do
     self.ew11:send(protocol.build_thermostat_query(i))
   end
+
+  -- Query outlets sequentially
+  local enable_outlet = (prefs.enableOutlet ~= false)
+  local outlet_count = enable_outlet and math.max(0, math.min(12, tonumber(prefs.outletCount) or 10)) or 0
+  for i = 1, outlet_count do
+    self.ew11:send(protocol.build_outlet_query(i))
+  end
 end
 
 --- Validate EW11 connection preferences before acting on them.

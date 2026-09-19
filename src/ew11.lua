@@ -396,8 +396,22 @@ function EW11:_process_buffer()
       log.error(string.format("[EW11] parse_packet error (recovered): %s", tostring(parsed)))
       self.buffer = self.buffer:sub(2)
     else
-      -- Shift by 1 byte to regain boundary sync
-      self.buffer = self.buffer:sub(2)
+      -- parse_packet returned nil (not a recognized device type).
+      -- Distinguish valid-checksum unknown packets (wallpad queries 0x30,
+      -- thermostat queries 0x02, commands from other controllers, etc.)
+      -- from genuinely misaligned data. Valid-checksum packets can be
+      -- consumed as 8 bytes; misaligned data needs 1-byte shift resync.
+      -- Without this, every unrecognized-but-valid bus packet (the wallpad
+      -- sends ~20 per polling cycle) would cause 8 wasted byte-shift
+      -- iterations plus ~1/65536-per-shift risk of false-positive
+      -- misalignment matches corrupting a subsequent packet.
+      local cs_bytes = {}
+      for i = 1, 8 do cs_bytes[i] = string.byte(candidate, i) end
+      if protocol.calculate_checksum(cs_bytes) == cs_bytes[8] then
+        self.buffer = self.buffer:sub(protocol.PACKET_LEN + 1)
+      else
+        self.buffer = self.buffer:sub(2)
+      end
     end
   end
 end

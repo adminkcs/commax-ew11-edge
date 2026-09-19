@@ -86,7 +86,7 @@ preferences:
     definition:
       minimum: 0
       maximum: 9
-      default: 4
+      default: 8
   - name: enableOutlet
     title: "콘센트 스위치 사용"
     description: "대기전력/스마트 콘센트 기기 생성 및 활성화 여부"
