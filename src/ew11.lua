@@ -22,7 +22,12 @@ local DEFAULT_RX_TIMEOUT = 0.05
 -- long-running driver must survive garbage data / command floods without
 -- unbounded memory growth):
 local MAX_RX_BUFFER = 512    -- bytes; garbage stream with no valid frame ever
-local MAX_TX_QUEUE = 20      -- pending commands; drop oldest beyond this
+local MAX_TX_QUEUE = 20      -- pending user-issued commands; drop oldest beyond this
+local MAX_POLL_QUEUE = 40    -- pending status-poll queries; sized above the
+                              -- largest realistic single poll_all_devices()
+                              -- burst (lights + thermostats + outlets, e.g.
+                              -- 8+4+10=22) so a poll cycle is never itself
+                              -- the reason a poll gets dropped
 local MIN_RECONNECT_DELAY = 5
 local MAX_RECONNECT_DELAY = 60
 
@@ -69,7 +74,18 @@ function EW11.new(driver, ip, port, on_packet_cb, config, on_fail_cb)
 
   -- Command TX queue: RS485 is a shared half-duplex bus, so commands are
   -- serialized (one at a time, ACK-confirmed) rather than fired concurrently.
+  --
+  -- Two separate queues, not one: periodic background polling
+  -- (poll_all_devices, up to ~22 queries per cycle) and real-time
+  -- user-issued commands (switch on/off, setpoint, ...) used to share a
+  -- single FIFO queue. A poll burst queued right before a user command
+  -- pushed that command's actual bus transmission back by as many ticks as
+  -- there were queued polls ahead of it, and could even cause it to be
+  -- evicted by MAX_TX_QUEUE eviction of the *oldest* entry if enough polls
+  -- piled up first. tx_queue (user commands) is always drained completely
+  -- before poll_queue (background polling) is touched at all.
   self.tx_queue = {}
+  self.poll_queue = {}
   self.pending = nil -- in-flight job awaiting ACK: {packet, ack_prefix, attempts_left, sent_at}
   self.tx_retry_cnt, self.tx_timeout, self.tx_delay, self.rx_timeout = parse_timing_config(config)
 
@@ -130,7 +146,8 @@ function EW11:update_config(ip, port, config)
   end
 end
 
---- Enqueue a command packet for transmission.
+--- Enqueue a user-issued command packet for transmission (high priority -
+--- always fully drained before any queued background poll is sent).
 --- @param raw_packet string  the 8-byte packet to send
 --- @param ack_prefix table|nil  byte array; if given, the queue waits for a
 ---   validly-parsed RX packet whose raw bytes start with this prefix before
@@ -155,6 +172,31 @@ function EW11:send(raw_packet, ack_prefix)
   })
   log.info(string.format("[TX] command requested: %s (ack=%s, queue_depth=%d)",
     protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.tx_queue))
+end
+
+--- Enqueue a background status-poll query (low priority - only sent once
+--- the user-command queue above is completely empty and idle). Used by
+--- periodic poll_all_devices() sweeps so a burst of routine polling can
+--- never delay or evict a real-time command the user just issued.
+--- @param raw_packet string  the 8-byte packet to send
+--- @param ack_prefix table|nil  same semantics as send() above
+function EW11:send_poll(raw_packet, ack_prefix)
+  if type(raw_packet) ~= "string" or #raw_packet ~= protocol.PACKET_LEN then
+    log.error("[EW11] send_poll() rejected: not a valid 8-byte packet")
+    return
+  end
+  if #self.poll_queue >= MAX_POLL_QUEUE then
+    log.warn(string.format("[EW11] Poll queue full (%d), dropping oldest queued poll", MAX_POLL_QUEUE))
+    table.remove(self.poll_queue, 1)
+  end
+  table.insert(self.poll_queue, {
+    packet = raw_packet,
+    ack_prefix = ack_prefix,
+    attempts_left = self.tx_retry_cnt,
+    enqueued_at = socket.gettime(),
+  })
+  log.info(string.format("[TX] poll requested: %s (ack=%s, poll_queue_depth=%d)",
+    protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.poll_queue))
 end
 
 --- Write a packet to the socket immediately (used internally by the queue).
@@ -228,11 +270,19 @@ function EW11:_tx_queue_tick()
         self.pending.sent_at = socket.gettime()
       end
     end
-  elseif #self.tx_queue > 0 then
+  else
+    -- tx_queue (user-issued commands) always drains completely before
+    -- poll_queue (background polling) is even looked at, so a burst of
+    -- routine polling can never delay or evict a real-time user command.
+    local queue = (#self.tx_queue > 0) and self.tx_queue
+      or (#self.poll_queue > 0) and self.poll_queue
+      or nil
+    if not queue then return end
+
     -- Don't dequeue if socket is not connected - preserve commands until reconnection
     if not self.sock then return end
 
-    local job = self.tx_queue[1]
+    local job = queue[1]
     local wait_time = now - (job.enqueued_at or now)
 
     -- Guard against continuous RX traffic starvation: if queued for >= MAX_BUS_WAIT, force send
@@ -245,7 +295,7 @@ function EW11:_tx_queue_tick()
       log.info(string.format("[TX] Bus busy over %.3fs (starvation guard), force transmitting %s", wait_time, protocol.to_hex(job.packet)))
     end
 
-    table.remove(self.tx_queue, 1)
+    table.remove(queue, 1)
     if self:_write(job.packet, false) then
       if job.ack_prefix then
         job.sent_at = socket.gettime()

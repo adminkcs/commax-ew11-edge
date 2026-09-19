@@ -420,4 +420,68 @@ do
   print("[PASS] ACK retry bus guard: retry is deferred when bus is busy")
 end
 
+-- 8. Priority queue separation: a burst of background polling (send_poll)
+-- queued ahead of a real-time user command (send) must NOT delay it.
+-- Regression for the exact scenario reported by the user: poll_all_devices()
+-- queuing up to lightCount+heaterCount+outletCount (e.g. 22) status queries
+-- used to share one FIFO queue with switch on/off commands, so a poll burst
+-- right before a button press could push the actual light-ON packet back by
+-- as many ticks as there were queued polls - or even get it evicted by
+-- MAX_TX_QUEUE if enough polls piled up first.
+do
+  local fake_sock = make_fake_sock()
+  local ew11 = EW11.new({ call_with_delay = function() end }, "1.2.3.4", 8899, nil, {
+    tx_retry_cnt = 0,
+  })
+  ew11.sock = fake_sock
+
+  -- Simulate a poll_all_devices() burst queued first (low priority)
+  for i = 1, 10 do
+    ew11:send_poll(protocol.build_light_query(i))
+  end
+  assert(#ew11.poll_queue == 10, "10 poll queries must be queued on poll_queue")
+
+  -- User presses a switch right after (high priority)
+  local user_cmd = hex_to_bin("31 01 01 00 00 00 00 33")
+  ew11:send(user_cmd)
+  assert(#ew11.tx_queue == 1, "User command must be queued on tx_queue, separate from poll_queue")
+
+  -- A single tick must send the user command FIRST, not the oldest queued poll
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 1, "Exactly one packet must have been transmitted")
+  assert(fake_sock.sent[1] == user_cmd,
+    "User command must be transmitted before any queued background poll, regardless of enqueue order")
+  assert(#ew11.tx_queue == 0, "tx_queue must be drained of the user command")
+  assert(#ew11.poll_queue == 10, "poll_queue must be untouched while tx_queue had work")
+
+  -- Once tx_queue is empty, polling proceeds normally
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 2, "Second tick must transmit the next packet")
+  assert(fake_sock.sent[2] == protocol.build_light_query(1),
+    "Once tx_queue is empty, the oldest queued poll is sent next")
+  assert(#ew11.poll_queue == 9, "poll_queue must advance by one")
+
+  print("[PASS] Priority queue: user command is sent before any queued background poll")
+end
+
+-- 9. poll_queue has its own bound, independent of MAX_TX_QUEUE, sized to
+-- comfortably hold a full poll_all_devices() sweep without ever dropping
+-- polls purely because tx_queue-sized limits were reused for both.
+do
+  local fake_sock = make_fake_sock()
+  local ew11 = EW11.new({ call_with_delay = function() end }, "1.2.3.4", 8899, nil, {
+    tx_retry_cnt = 0,
+  })
+  ew11.sock = fake_sock
+
+  -- A realistic poll_all_devices() burst: 8 lights + 4 thermostats + 10 outlets = 22
+  for i = 1, 22 do
+    ew11:send_poll(protocol.build_light_query(i))
+  end
+  assert(#ew11.poll_queue == 22,
+    "A full 22-query poll_all_devices() sweep must not be truncated by a tx_queue-sized cap")
+
+  print("[PASS] Poll queue: sized to hold a full poll_all_devices() sweep without dropping")
+end
+
 print("=== All EW11 TX Queue / ACK / Disconnect / rx_timeout Tests Passed Successfully! ===")

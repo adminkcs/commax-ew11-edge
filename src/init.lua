@@ -70,9 +70,10 @@ function commax_driver:sync_child_devices(bridge_device)
         device_network_id = dni
       })
     end
-    -- Query hardware for real light state
+    -- Query hardware for real light state (background sync, not a live
+    -- user command - low priority so it never delays a real switch action)
     if self.ew11 then
-      self.ew11:send(protocol.build_light_query(i))
+      self.ew11:send_poll(protocol.build_light_query(i))
     end
   end
 
@@ -216,25 +217,30 @@ function commax_driver:poll_all_devices()
   local bridge = self:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
 
+  -- Background polling uses send_poll(), not send(): these queries go on the
+  -- low-priority poll_queue so a burst of up to lightCount+heaterCount+
+  -- outletCount queries can never delay or evict a real-time user command
+  -- (switch on/off, setpoint, ...) that lands on the high-priority tx_queue.
+
   -- Query lights sequentially
   local enable_light = (prefs.enableLight ~= false)
   local light_count = enable_light and math.max(0, math.min(9, tonumber(prefs.lightCount) or 4)) or 0
   for i = 1, light_count do
-    self.ew11:send(protocol.build_light_query(i))
+    self.ew11:send_poll(protocol.build_light_query(i))
   end
 
   -- Query heaters sequentially
   local enable_heating = (prefs.enableHeating ~= false)
   local heater_count = enable_heating and math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4)) or 0
   for i = 1, heater_count do
-    self.ew11:send(protocol.build_thermostat_query(i))
+    self.ew11:send_poll(protocol.build_thermostat_query(i))
   end
 
   -- Query outlets sequentially
   local enable_outlet = (prefs.enableOutlet ~= false)
   local outlet_count = enable_outlet and math.max(0, math.min(12, tonumber(prefs.outletCount) or 10)) or 0
   for i = 1, outlet_count do
-    self.ew11:send(protocol.build_outlet_query(i))
+    self.ew11:send_poll(protocol.build_outlet_query(i))
   end
 end
 
@@ -308,7 +314,7 @@ local function device_init(driver, device)
     local light_id = dni:match("^commax:light:(%d+)$")
     if light_id then
       if driver.ew11 then
-        driver.ew11:send(protocol.build_light_query(tonumber(light_id)))
+        driver.ew11:send_poll(protocol.build_light_query(tonumber(light_id)))
       else
         pcall(function() device:emit_event(capabilities.switch.switch.off()) end)
       end
