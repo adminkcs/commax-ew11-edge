@@ -77,7 +77,7 @@ preferences:
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: lightCount
     title: "조명 개수"
     description: "등록할 조명 스위치 개수 (0~9개)"
@@ -86,14 +86,14 @@ preferences:
     definition:
       minimum: 0
       maximum: 9
-      default: 8
+      default: 0
   - name: enableOutlet
     title: "콘센트 스위치 사용"
     description: "대기전력/스마트 콘센트 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: outletCount
     title: "콘센트 개수"
     description: "등록할 콘센트 스위치 개수 (0~12개)"
@@ -102,14 +102,14 @@ preferences:
     definition:
       minimum: 0
       maximum: 12
-      default: 10
+      default: 0
   - name: enableHeating
     title: "난방 온도조절기 사용"
     description: "각 방 난방 온도조절기 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: heaterCount
     title: "난방 구역 개수"
     description: "등록할 난방 구역(방) 개수 (0~9개)"
@@ -118,35 +118,35 @@ preferences:
     definition:
       minimum: 0
       maximum: 9
-      default: 4
+      default: 0
   - name: enableFan
     title: "환기팬 사용"
     description: "전열교환기 환기팬 기기 생성 및 활성화 여부"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: enableGas
     title: "가스 차단 밸브 사용"
     description: "가스 차단 밸브 기기 생성 (안전 법규상 닫기 전용)"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: enableAirQuality
     title: "공기질 센서 사용"
     description: "CO2, PM2.5, PM10 복합 공기질 센서 기기 생성"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: enableElevator
     title: "엘리베이터 호출 사용"
     description: "엘리베이터 하강 호출 버튼 기기 생성"
     required: true
     preferenceType: boolean
     definition:
-      default: true
+      default: false
   - name: elevatorCallCount
     title: "엘리베이터 호출 반복 전송"
     description: "1회 호출 버튼 클릭 시 패킷 반복 전송 횟수 (1~5회, 기본값 2회)"

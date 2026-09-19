@@ -37,19 +37,20 @@ function commax_driver:sync_child_devices(bridge_device)
 
   -- Preferences come from user input in the SmartThings app - clamp to the
   -- profile's declared range rather than trusting them blindly.
-  local enable_light = (prefs.enableLight ~= false)
-  local light_count = enable_light and math.max(0, math.min(9, tonumber(prefs.lightCount) or 4)) or 0
+  -- Default is false / 0 so no child devices are created automatically.
+  local enable_light = (prefs.enableLight == true)
+  local light_count = enable_light and math.max(0, math.min(9, tonumber(prefs.lightCount) or 0)) or 0
 
-  local enable_heating = (prefs.enableHeating ~= false)
-  local heater_count = enable_heating and math.max(0, math.min(9, tonumber(prefs.heaterCount) or 4)) or 0
+  local enable_heating = (prefs.enableHeating == true)
+  local heater_count = enable_heating and math.max(0, math.min(9, tonumber(prefs.heaterCount) or 0)) or 0
 
-  local enable_outlet = (prefs.enableOutlet ~= false)
-  local outlet_count = enable_outlet and math.max(0, math.min(12, tonumber(prefs.outletCount) or 10)) or 0
+  local enable_outlet = (prefs.enableOutlet == true)
+  local outlet_count = enable_outlet and math.max(0, math.min(12, tonumber(prefs.outletCount) or 0)) or 0
 
-  local enable_fan = (prefs.enableFan ~= false)
-  local enable_gas = (prefs.enableGas ~= false)
-  local enable_air_quality = (prefs.enableAirQuality ~= false)
-  local enable_elevator = (prefs.enableElevator ~= false)
+  local enable_fan = (prefs.enableFan == true)
+  local enable_gas = (prefs.enableGas == true)
+  local enable_air_quality = (prefs.enableAirQuality == true)
+  local enable_elevator = (prefs.enableElevator == true)
 
   -- 1. Create Lights
   local LIGHT_LABELS = {
@@ -286,10 +287,9 @@ local function device_init(driver, device)
       end
     end
 
-    local ok, err = pcall(function() driver:sync_child_devices(device) end)
-    if not ok then
-      log.error(string.format("[Init] sync_child_devices failed: %s", tostring(err)))
-    end
+    -- Child devices are intentionally NOT created during device_init.
+    -- They are only created when the user explicitly applies/saves settings
+    -- in the SmartThings app (device_info_changed) or pulls Refresh on the bridge.
 
     -- Start periodic query schedule if enabled.
     local interval = tonumber(prefs.refreshTime) or tonumber(prefs.pollInterval) or 10

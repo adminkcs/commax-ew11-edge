@@ -273,6 +273,10 @@ function handler.handle_refresh(driver, device, command)
     local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
     safe_send(driver, protocol.build_outlet_query(outlet_id))
   elseif dni == "commax-bridge" then
+    local ok, err = pcall(function() driver:sync_child_devices(device) end)
+    if not ok then
+      log.error(string.format("[Handler] sync_child_devices on refresh failed: %s", tostring(err)))
+    end
     driver:poll_all_devices()
   end
 end

@@ -1,4 +1,4 @@
-﻿local EW11 = require("ew11")
+local EW11 = require("ew11")
 local handler = require("device_handler")
 local protocol = require("commax_protocol")
 
@@ -123,5 +123,46 @@ assert(outlet_created == 0, "No outlets should be created when enableOutlet=fals
 assert(gas_created == 1, "Gas valve should be created")
 assert(elevator_created == 1, "Elevator should be created")
 print("[PASS] sync_child_devices respects enable/disable flags and counts")
+
+-- 5. Test Default Preferences: No child devices created when preferences are empty or default (all false/0)
+local default_created_devices = {}
+driver.try_create_device = function(self, spec)
+  table.insert(default_created_devices, spec)
+  return true
+end
+driver._devices = {}
+
+local default_bridge = {
+  id = "bridge-default",
+  device_network_id = "commax-bridge",
+  preferences = {}
+}
+
+driver:sync_child_devices(default_bridge)
+assert(#default_created_devices == 0, string.format("Expected 0 devices created by default, but got %d", #default_created_devices))
+print("[PASS] sync_child_devices creates NO devices by default (empty preferences)")
+
+-- Also test with explicit default-profile values (all false, counts 0)
+default_created_devices = {}
+local explicit_default_bridge = {
+  id = "bridge-explicit-default",
+  device_network_id = "commax-bridge",
+  preferences = {
+    enableLight = false,
+    lightCount = 0,
+    enableHeating = false,
+    heaterCount = 0,
+    enableOutlet = false,
+    outletCount = 0,
+    enableFan = false,
+    enableGas = false,
+    enableAirQuality = false,
+    enableElevator = false,
+  }
+}
+
+driver:sync_child_devices(explicit_default_bridge)
+assert(#default_created_devices == 0, string.format("Expected 0 devices created with explicit default false/0, but got %d", #default_created_devices))
+print("[PASS] sync_child_devices creates NO devices with explicit profile defaults (all false, count 0)")
 
 print("=== All Preferences Expansion Tests Passed Successfully! ===")
