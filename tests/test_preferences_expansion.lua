@@ -44,8 +44,8 @@ print("[PASS] EW11 update_config dynamic update")
 
 -- 3. Test elevator call repeat count preference
 local enqueued = {}
-ew11_inst.send = function(self, pkt, ack)
-  table.insert(enqueued, { pkt = pkt, ack = ack })
+ew11_inst.send = function(self, pkt, ack, opts)
+  table.insert(enqueued, { pkt = pkt, ack = ack, opts = opts })
 end
 fake_driver.ew11 = ew11_inst
 
@@ -62,8 +62,11 @@ fake_driver.get_device_by_dni = function(self, dni)
 end
 
 handler.handle_elevator_call_down(fake_driver, { device_network_id = "commax:elevator:1" }, {})
-assert(#enqueued == 3, string.format("Expected 3 elevator packets enqueued, got %d", #enqueued))
-print("[PASS] Elevator call repeat count (3 packets)")
+assert(#enqueued == 1, string.format("Expected 1 atomic burst job enqueued, got %d", #enqueued))
+assert(enqueued[1].opts and enqueued[1].opts.burst_count == 3, string.format("Expected burst_count 3, got %s", tostring(enqueued[1].opts and enqueued[1].opts.burst_count)))
+assert(enqueued[1].opts and enqueued[1].opts.burst_delay == 0.015, "Expected burst_delay 0.015s")
+assert(enqueued[1].opts and enqueued[1].opts.tag == "elevator", "Expected tag 'elevator'")
+print("[PASS] Elevator call repeat count (atomic 3-packet burst)")
 
 -- 4. Test Child Device sync with enable flags via init.lua driver
 require("init")

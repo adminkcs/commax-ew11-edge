@@ -9,12 +9,12 @@ local handler = {}
 --- command arrives before the bridge finishes init, or after the bridge was
 --- removed but a stale child device tile is still commanded). Without this
 --- guard, driver.ew11:send(...) would throw "attempt to index a nil value".
-local function safe_send(driver, packet, ack_prefix)
+local function safe_send(driver, packet, ack_prefix, opts)
   if not driver.ew11 then
     log.warn("[Handler] Command dropped: EW11 bridge is not connected/initialized yet")
     return
   end
-  local ok, err = pcall(function() driver.ew11:send(packet, ack_prefix) end)
+  local ok, err = pcall(function() driver.ew11:send(packet, ack_prefix, opts) end)
   if not ok then
     log.error(string.format("[Handler] Failed to enqueue command: %s", tostring(err)))
   end
@@ -120,6 +120,7 @@ function handler.handle_parsed_packet(driver, parsed)
 
   -- 7. Elevator Status Event
   elseif parsed.device_type == "elevator_status" then
+    log.info("[ELEVATOR] Wallpad broadcasted elevator status (0x23) -> keeping called state")
     device:emit_event(capabilities.elevatorCall.callStatus.called())
     -- Reset to standby if no more status packets arrive in 4 seconds
     if handler._elevator_reset_timer and driver and driver.cancel_timer then
@@ -128,6 +129,7 @@ function handler.handle_parsed_packet(driver, parsed)
     if driver and driver.call_with_delay then
       handler._elevator_reset_timer = driver:call_with_delay(4, function()
         handler._elevator_reset_timer = nil
+        log.info("[ELEVATOR] Status packets stopped -> resetting to standby")
         local dev = driver:get_device_by_dni("commax:elevator:1")
         if dev then
           dev:emit_event(capabilities.elevatorCall.callStatus.standby())
@@ -278,7 +280,7 @@ end
 
 --- Elevator call command (SmartThings elevatorCall capability)
 function handler.handle_elevator_call(driver, device, command)
-  log.info("[Handler] Elevator call requested")
+  log.info("[ELEVATOR] Down-call requested via SmartThings")
   if device and device.emit_event then
     device:emit_event(capabilities.elevatorCall.callStatus.called())
   end
@@ -288,12 +290,7 @@ function handler.handle_elevator_call(driver, device, command)
 
   local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
-  local repeat_cnt = math.max(2, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
-
-  log.info(string.format("[Handler] Transmitting %d elevator down-call packet(s) with ACK verification", repeat_cnt))
-  for _ = 1, repeat_cnt do
-    safe_send(driver, packet, ack)
-  end
+  local burst_cnt = math.max(2, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
 
   -- Fallback auto-reset to standby after 10s if wallpad 0x23 packets don't take over
   if handler._elevator_reset_timer and driver and driver.cancel_timer then
@@ -302,11 +299,36 @@ function handler.handle_elevator_call(driver, device, command)
   if driver and driver.call_with_delay then
     handler._elevator_reset_timer = driver:call_with_delay(10, function()
       handler._elevator_reset_timer = nil
-      if device and device.emit_event then
-        device:emit_event(capabilities.elevatorCall.callStatus.standby())
+      local dev = driver:get_device_by_dni("commax:elevator:1") or device
+      if dev and dev.emit_event then
+        log.info("[ELEVATOR] Timeout fallback: resetting to standby")
+        dev:emit_event(capabilities.elevatorCall.callStatus.standby())
       end
     end)
   end
+
+  local opts = {
+    tag = "elevator",
+    burst_count = burst_cnt,
+    burst_delay = 0.015, -- 15ms interval between burst packets
+    on_ack = function()
+      log.info("[ELEVATOR] Wallpad ACK received, call confirmed")
+    end,
+    on_fail = function()
+      log.warn("[ELEVATOR] Transmission failed after retries, reverting to standby")
+      if handler._elevator_reset_timer and driver and driver.cancel_timer then
+        driver:cancel_timer(handler._elevator_reset_timer)
+        handler._elevator_reset_timer = nil
+      end
+      local dev = driver:get_device_by_dni("commax:elevator:1") or device
+      if dev and dev.emit_event then
+        dev:emit_event(capabilities.elevatorCall.callStatus.standby())
+      end
+    end,
+  }
+
+  log.info(string.format("[ELEVATOR] Enqueueing %d-packet atomic burst (15ms spacing) with ACK verification", burst_cnt))
+  safe_send(driver, packet, ack, opts)
 end
 
 -- Backward compatibility alias

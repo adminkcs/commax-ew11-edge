@@ -14,7 +14,7 @@
 | **콘센트 (Outlet)** | `commax-outlet` (ID 1~10) | 전원 ON/OFF (대기전력 차단 콘센트 제어) | **안정화 완료** | 10개 전 콘센트 실측 패킷 검증 및 실사용 안정화 |
 | **보일러 / 난방 (Thermostat)** | `commax-thermostat` (ID 1~4) | 희망온도 설정, 현재온도 측정, 모드(꺼짐/난방) 제어 | **안정화 완료** | 꺼짐/난방 2가지 모드만 노출하는 전용 커스텀 VID 적용 완료 |
 | **전열기 / 환기팬 (Fan)** | `commax-fan` (ID 1) | 전열교환기 환기팬 전원 ON/OFF, 풍량(1~3단) 조절 | **안정화 완료** | 전열(0x04) 기본 운전 모드 및 실시간 풍량 연동 안정화 |
-| **엘리베이터 (Elevator)** | `commax-elevator` | 엘리베이터 하강 호출 (Momentary) | 연동 지원 | RS485-Matter 브릿지 연동 (2회 연속 안전 전송) |
+| **엘리베이터 (Elevator)** | `commax-elevator` | 엘리베이터 하강 호출 (`elevatorCall`) | **안정화 완료** | 15ms 버스트 2회 연속 전송 + ACK 검증/재시도 + 0x23 이동상태 연동 |
 | **가스밸브 (Gas)** | `commax-gas` (ID 1) | 밸브 상태 모니터링 및 원격 닫기 | 연동 지원 | 안전 규정에 따라 원격 닫기만 허용 (열기 불가) |
 | **공기질 센서 (Air Quality)** | `commax-airquality` | 실시간 CO2, 미세먼지(PM2.5/PM10) 모니터링 | 연동 지원 | 수신 전용 모니터링 |
 
@@ -161,16 +161,18 @@ CO2는 마지막 2바이트(6-7번째), PM2.5/PM10은 4-5번째 바이트를 2�
 
 **PM1.0(초미세먼지) 관련**: 45분 분량의 실측 캡처 전체에서 `0xC8` 헤더의 서브바이트는 `0x11`/`0x1F` 두 종류만 발견되었고 세 번째 값은 없었다. 즉 이 월패드/EW11 버스에는 PM1.0을 별도로 방송하는 패킷이 아예 존재하지 않는 것으로 보인다 — 코드 누락이 아니라 하드웨어가 PM1.0을 이 프로토콜로 노출하지 않을 가능성이 높다. 월패드 화면에 PM1.0 수치가 실제로 표시되는지, 그리고 표시된다면 그 값이 변할 때 버스에 어떤 새 패킷이 뜨는지 재확인이 필요하다.
 
-### 3.7 엘리베이터 하강호출 (`commax:elevator`, momentary, 상승 미구현)
+### 3.7 엘리베이터 하강호출 (`commax:elevator`, `elevatorCall` capability, 상승 미구현)
 
 | 항목 | 패킷 | 출처 |
 |---|---|---|
 | 하강호출 명령 | `22 01 40 07 00 00 00 6A` | 실측 확정 |
 | ACK | `A2 01 01 00 00 00 00 A4` | 실측 확정 |
+| 이동/호출 중 상태 | `23 01 40 00 00 00 00 64` | 실측 확정 (호출 중 주기적 브로드캐스트) |
 
 - 월패드 자체 버튼은 이 RS485 버스에 아무 흔적을 안 남긴다(다른 경로 통신 추정). 사용자가 보유한 "브릿지허브"(RS485↔Matter 변환기)로 호출했을 때만 버스에 명령이 실린다.
-- **버튼 1회 = 정확히 2번 전송**이 두 번의 별도 세션에서 재현 확인됐다(각각 즉시 ACK). `handler.handle_elevator_call_down`이 `safe_send`를 2번 호출하도록 구현되어 있다.
-- 호출 직후 반복 관측되는 `23/A3` 상태쌍은 호출/도착 여부와 무관하게 계속 나와 의미 불명 — 파싱하지 않는다.
+- **물리 타이밍 요구사항 (15ms 연속 버스트)**: 월패드는 2개 패킷(`22 01 40 07 00 00 00 6A`)이 **12~20ms 이내 간격**으로 연속 도착해야만 하강 호출을 인정한다. 개별 큐잉 시 ACK 대기 지연(수백 ms)으로 인해 인식이 실패하므로, EW11 큐에서 15ms 간격 원자적(atomic) 버스트로 전송하고 이후 ACK를 대기/재시도한다.
+- **0x23 상태 패킷 연동**: 엘리베이터가 실제 호출되어 이동 중일 때 월패드가 주기적으로 0x23 패킷을 브로드캐스트한다. 4초 타이머로 수신 중단(도착)을 감지해 `standby` 상태로 자동 복원된다.
+- **실패 롤백**: ACK 타임아웃 및 재시도 소진 시 `on_fail` 콜백을 통해 즉시 `standby`로 롤백된다.
 - 상승호출은 미구현: 브릿지허브 앱 자체에 상승 기능이 없어 테스트 경로가 없다(7절 참고).
 
 ## 4. 알려진 프로토콜 충돌 (구현에 영향 없음, 참고용)
@@ -195,7 +197,7 @@ CO2는 마지막 2바이트(6-7번째), PM2.5/PM10은 4-5번째 바이트를 2�
 | `commax-gas` | valve, refresh | `handle_valve_close` (open은 항상 차단) |
 | `commax-outlet` | switch, refresh | `handle_switch_on/off` |
 | `commax-airquality` | carbonDioxideMeasurement, dustSensor, veryFineDustSensor, refresh | 명령 없음(읽기 전용) |
-| `commax-elevator` | momentary | `handle_elevator_call_down` (하강만, 2회 전송) |
+| `commax-elevator` | elevatorCall | `handle_elevator_call` (하강, 15ms 버스트 2회 전송 + ACK 검증) |
 
 데이터 흐름: `SmartThings Capability → device_handler.lua → commax_protocol.lua (패킷 생성) → ew11.lua (TCP 송신)`, 수신은 `ew11.lua (TCP 수신/프레이밍) → commax_protocol.lua (파싱) → device_handler.lua (Capability 이벤트 emit)`.
 

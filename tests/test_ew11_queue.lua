@@ -484,4 +484,80 @@ do
   print("[PASS] Poll queue: sized to hold a full poll_all_devices() sweep without dropping")
 end
 
+-- 10. Elevator burst transmission: atomic burst of packets (15ms delay)
+-- and ACK matching / retry / on_fail rollback.
+do
+  local fake_sock = make_fake_sock()
+  local ack_called = false
+  local fail_called = false
+
+  local ew11 = EW11.new({ call_with_delay = function() end }, "1.2.3.4", 8899, nil, {
+    tx_timeout = 0.200,
+    tx_retry_cnt = 2,
+  })
+  ew11.sock = fake_sock
+
+  local elevator_pkt = hex_to_bin("22 01 40 07 00 00 00 6A")
+  local ack_prefix = { 0xA2, 0x01, 0x01 }
+
+  ew11:send(elevator_pkt, ack_prefix, {
+    tag = "elevator",
+    burst_count = 2,
+    burst_delay = 0.015,
+    on_ack = function() ack_called = true end,
+    on_fail = function() fail_called = true end,
+  })
+
+  assert(#ew11.tx_queue == 1, "Single atomic burst job should be queued")
+  ew11:_tx_queue_tick()
+
+  -- Should transmit 2 packets in burst
+  assert(#fake_sock.sent == 2, string.format("Expected 2 packets in burst, got %d", #fake_sock.sent))
+  assert(fake_sock.sent[1] == elevator_pkt, "First packet matches elevator call")
+  assert(fake_sock.sent[2] == elevator_pkt, "Second packet matches elevator call")
+  assert(ew11.pending ~= nil, "Job should be pending ACK")
+
+  -- Simulate ACK received
+  local wallpad_ack = hex_to_bin("A2 01 01 00 00 00 00 A4")
+  ew11:_check_ack(wallpad_ack)
+  assert(ack_called == true, "on_ack callback should have been called")
+  assert(ew11.pending == nil, "pending job cleared after ACK")
+
+  print("[PASS] Elevator burst: 2 packets transmitted atomically and ACK matched")
+
+  -- Test retry burst and on_fail callback
+  ack_called = false
+  fail_called = false
+  fake_sock.sent = {}
+
+  ew11:send(elevator_pkt, ack_prefix, {
+    tag = "elevator",
+    burst_count = 2,
+    burst_delay = 0.015,
+    on_ack = function() ack_called = true end,
+    on_fail = function() fail_called = true end,
+  })
+
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 2, "First attempt: 2 packets sent")
+
+  -- Simulate timeout 1: should retry burst
+  ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 4, "Retry 1: another 2 packets sent (total 4)")
+
+  -- Simulate timeout 2: should retry burst (last attempt)
+  ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
+  ew11:_tx_queue_tick()
+  assert(#fake_sock.sent == 6, "Retry 2: another 2 packets sent (total 6)")
+
+  -- Simulate timeout 3: retries exhausted -> on_fail
+  ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
+  ew11:_tx_queue_tick()
+  assert(fail_called == true, "on_fail callback must be invoked when retries exhausted")
+  assert(ew11.pending == nil, "pending cleared after exhausting retries")
+
+  print("[PASS] Elevator burst retry and on_fail callback verified")
+end
+
 print("=== All EW11 TX Queue / ACK / Disconnect / rx_timeout Tests Passed Successfully! ===")

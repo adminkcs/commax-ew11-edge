@@ -465,9 +465,6 @@ commax_driver.capability_handlers = {
   },
   [capabilities.elevatorCall.ID] = {
     [capabilities.elevatorCall.commands.call.NAME] = handler.handle_elevator_call,
-  },
-  [capabilities.momentary.ID] = {
-    [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call,
   }
 }
 

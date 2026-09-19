@@ -164,11 +164,12 @@ end
 ---   considering the command acknowledged, retrying up to tx_retry_cnt times
 ---   on timeout. If nil, the command is fire-and-forget (queue moves on
 ---   immediately after the write).
-function EW11:send(raw_packet, ack_prefix)
+function EW11:send(raw_packet, ack_prefix, opts)
   if type(raw_packet) ~= "string" or #raw_packet ~= protocol.PACKET_LEN then
     log.error("[EW11] send() rejected: not a valid 8-byte packet")
     return
   end
+  opts = opts or {}
   -- Command flooding must not grow the queue without bound.
   if #self.tx_queue >= MAX_TX_QUEUE then
     log.warn(string.format("[EW11] TX queue full (%d), dropping oldest queued command", MAX_TX_QUEUE))
@@ -179,9 +180,19 @@ function EW11:send(raw_packet, ack_prefix)
     ack_prefix = ack_prefix,
     attempts_left = self.tx_retry_cnt,
     enqueued_at = socket.gettime(),
+    burst_count = opts.burst_count,
+    burst_delay = opts.burst_delay,
+    tag = opts.tag,
+    on_ack = opts.on_ack,
+    on_fail = opts.on_fail,
   })
-  log.info(string.format("[TX] command requested: %s (ack=%s, queue_depth=%d)",
-    protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.tx_queue))
+  if opts.tag == "elevator" then
+    log.info(string.format("[ELEVATOR] Command enqueued: %s (ack=%s, burst_count=%d, queue_depth=%d)",
+      protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), opts.burst_count or 1, #self.tx_queue))
+  else
+    log.info(string.format("[TX] command requested: %s (ack=%s, queue_depth=%d)",
+      protocol.to_hex(raw_packet), tostring(ack_prefix ~= nil), #self.tx_queue))
+  end
 end
 
 --- Enqueue a background status-poll query (low priority - only sent once
@@ -229,6 +240,24 @@ function EW11:_write(raw_packet, is_retry)
   return true
 end
 
+--- Write a burst of packets with tight inter-packet timing (e.g. elevator down-call: 2 packets ~15ms apart)
+function EW11:_write_burst(job, is_retry)
+  local count = job.burst_count or 1
+  local delay = job.burst_delay or 0.015
+  if job.tag == "elevator" then
+    log.info(string.format("[ELEVATOR] Transmitting %d-packet burst (%s, delay=%.0fms): %s",
+      count, is_retry and "retry" or "initial", delay * 1000, protocol.to_hex(job.packet)))
+  end
+  for i = 1, count do
+    local ok = self:_write(job.packet, is_retry)
+    if not ok then return false end
+    if i < count then
+      socket.sleep(delay)
+    end
+  end
+  return true
+end
+
 --- RS485 is half-duplex. 8 bytes at 9600 baud takes 8.33ms.
 --- BUS_IDLE_GUARD is set to 20ms (0.02s) to prevent on-wire collision without
 --- starving the TX queue under continuous RX traffic (where packet intervals avg 55ms).
@@ -261,9 +290,21 @@ function EW11:_tx_queue_tick()
       end
       self.pending.attempts_left = self.pending.attempts_left - 1
       if self.pending.attempts_left < 0 then
-        log.warn(string.format(
-          "[EW11] Command failed: no ACK after %d attempt(s) -> %s",
-          self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
+        if self.pending.tag == "elevator" then
+          log.warn(string.format(
+            "[ELEVATOR] Command failed: no ACK after %d attempt(s) -> %s",
+            self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
+        else
+          log.warn(string.format(
+            "[EW11] Command failed: no ACK after %d attempt(s) -> %s",
+            self.tx_retry_cnt + 1, protocol.to_hex(self.pending.packet)))
+        end
+        if self.pending.on_fail then
+          local ok, err = pcall(self.pending.on_fail, self.pending)
+          if not ok then
+            log.error(string.format("[ELEVATOR] on_fail callback error: %s", tostring(err)))
+          end
+        end
         -- Notify caller so it can roll back optimistic UI state
         if self.on_fail_cb then
           local cb_ok, cb_err = pcall(self.on_fail_cb, self.pending.packet, self.pending.ack_prefix)
@@ -273,10 +314,19 @@ function EW11:_tx_queue_tick()
         end
         self.pending = nil
       else
-        log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
-          self.tx_timeout, self.pending.attempts_left))
+        if self.pending.tag == "elevator" then
+          log.info(string.format("[ELEVATOR] ACK timeout (%.3fs) -> retrying burst (%d attempts left)...",
+            self.tx_timeout, self.pending.attempts_left))
+        else
+          log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
+            self.tx_timeout, self.pending.attempts_left))
+        end
         socket.sleep(self.tx_delay)
-        self:_write(self.pending.packet, true)
+        if self.pending.burst_count and self.pending.burst_count > 1 then
+          self:_write_burst(self.pending, true)
+        else
+          self:_write(self.pending.packet, true)
+        end
         self.pending.sent_at = socket.gettime()
       end
     end
@@ -306,7 +356,13 @@ function EW11:_tx_queue_tick()
     end
 
     table.remove(queue, 1)
-    if self:_write(job.packet, false) then
+    local write_ok = false
+    if job.burst_count and job.burst_count > 1 then
+      write_ok = self:_write_burst(job, false)
+    else
+      write_ok = self:_write(job.packet, false)
+    end
+    if write_ok then
       if job.ack_prefix then
         job.sent_at = socket.gettime()
         self.pending = job
@@ -334,7 +390,17 @@ function EW11:_check_ack(raw_bytes)
   for i = 1, #prefix do
     if string.byte(raw_bytes, i) ~= prefix[i] then return end
   end
-  log.info(string.format("[ACK] matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
+  if self.pending.tag == "elevator" then
+    log.info(string.format("[ELEVATOR] ACK matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
+  else
+    log.info(string.format("[ACK] matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
+  end
+  if self.pending.on_ack then
+    local ok, err = pcall(self.pending.on_ack, self.pending, raw_bytes)
+    if not ok then
+      log.error(string.format("[ELEVATOR] on_ack callback error: %s", tostring(err)))
+    end
+  end
   self.pending = nil
 end
 
