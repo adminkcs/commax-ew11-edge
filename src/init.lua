@@ -348,6 +348,7 @@ local function device_info_changed(driver, device, event, args)
       tostring(old_prefs.txRetryCount), tostring(prefs.txRetryCount),
       tostring(old_prefs.txDelay), tostring(prefs.txDelay),
       tostring(old_prefs.ackTimeout), tostring(prefs.ackTimeout),
+      tostring(old_prefs.refreshTime or old_prefs.pollInterval),
       tostring(prefs.refreshTime or prefs.pollInterval)))
 
     local ip, port, verr = validate_ew11_prefs(prefs.ew11Ip, prefs.ew11Port)

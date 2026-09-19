@@ -104,14 +104,24 @@ function EW11:start()
   if self.running then return end
   self.running = true
 
-  -- Spawn background reader coroutine via cosock
-  self.driver:call_with_delay(0.1, function()
-    self:_connection_loop()
-  end)
-  -- Spawn the command TX queue processor
-  self.driver:call_with_delay(0.1, function()
-    self:_tx_queue_loop()
-  end)
+  local cosock_ok, cosock = pcall(require, "cosock")
+  if cosock_ok and cosock and cosock.spawn then
+    log.info("[EW11] Spawning background loops via cosock.spawn")
+    cosock.spawn(function()
+      self:_connection_loop()
+    end, "EW11_ConnectionLoop")
+    cosock.spawn(function()
+      self:_tx_queue_loop()
+    end, "EW11_TxQueueLoop")
+  else
+    -- Fallback for test environments without real cosock runtime
+    self.driver:call_with_delay(0.1, function()
+      self:_connection_loop()
+    end)
+    self.driver:call_with_delay(0.1, function()
+      self:_tx_queue_loop()
+    end)
+  end
 end
 
 function EW11:stop()
