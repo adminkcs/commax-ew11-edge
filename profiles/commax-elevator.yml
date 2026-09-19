@@ -2,7 +2,13 @@ name: commax-elevator
 components:
   - id: main
     capabilities:
-      - id: momentary
+      - id: elevatorCall
+        version: 1
+      - id: refresh
         version: 1
     categories:
-      - name: Other
+      - name: Elevator
+metadata:
+  vid: 3369733b-acfb-3d6a-8d33-4912d1e496eb
+  mnmn: SmartThingsCommunity
+  ocfDeviceType: x.com.st.d.elevator

@@ -285,6 +285,12 @@ local res_thermo_reserve, err_tr = protocol.parse_packet(thermo_reserve_pkt)
 assert(res_thermo_reserve and res_thermo_reserve.mode == "off" and res_thermo_reserve.state == "idle", "Thermo RESERVE should surface as off/idle")
 print("[PASS] Parse Thermostat State (Reserve mode -> off/idle)")
 
+-- Elevator status: CONFIRMED 2026-09-17 real capture "23 01 01 04 07 00 00 30"
+local elev_status_pkt = hex_to_bin("23 01 01 04 07 00 00 30")
+local res_elev_status, err_es = protocol.parse_packet(elev_status_pkt)
+assert(res_elev_status and res_elev_status.device_type == "elevator_status" and res_elev_status.status == "called", "Elevator status should be called")
+print("[PASS] Parse Elevator Status (0x23, real-capture-confirmed)")
+
 -- 7. Robustness Tests (fault-injection scenarios from the failure-mode
 -- review: malformed/garbage input must never crash the parser or builders,
 -- since one bad packet/command must not be able to take down the driver)

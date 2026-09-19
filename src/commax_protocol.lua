@@ -539,7 +539,17 @@ function protocol.parse_packet(raw_bytes)
       raw = raw_bytes
     }
 
-  -- 8. Elevator Down-Call ACK (0xA2 0x01 0x01) - no persistent state exists
+  -- 8. Elevator Status (0x23 or 0xA3)
+  -- Real-capture confirmed (2026-09-17): during elevator movement/call,
+  -- 0x23 01 01 04 07 ... repeats periodically (~60s) on the bus.
+  elseif head == 0x23 or head == 0xA3 then
+    return {
+      device_type = "elevator_status",
+      status = "called",
+      raw = raw_bytes
+    }
+
+  -- 9. Elevator Down-Call ACK (0xA2 0x01 0x01) - no persistent state exists
   -- for this device (momentary call only), so this only exists to let
   -- ew11.lua's TX queue recognize the ACK and stop retrying; it is not
   -- mapped to any SmartThings device event.

@@ -1,0 +1,51 @@
+{
+  "type": "profile",
+  "dashboard": {
+    "states": [
+      {
+        "component": "main",
+        "capability": "switch",
+        "version": 1,
+        "values": []
+      }
+    ],
+    "actions": [
+      {
+        "component": "main",
+        "capability": "switch",
+        "version": 1
+      }
+    ]
+  },
+  "detailView": [
+    {
+      "component": "main",
+      "capability": "switch",
+      "version": 1,
+      "values": []
+    },
+    {
+      "component": "main",
+      "capability": "fanSpeed",
+      "version": 1,
+      "values": [
+        {
+          "key": "fanSpeed.value",
+          "range": [0, 3],
+          "enabledValues": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "main",
+      "capability": "refresh",
+      "version": 1,
+      "values": []
+    }
+  ]
+}

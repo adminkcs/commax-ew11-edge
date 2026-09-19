@@ -10,3 +10,6 @@ components:
         version: 1
     categories:
       - name: Vent
+metadata:
+  vid: 234bca6a-d7e5-35b0-8131-c23b5ea29b8c
+  mnmn: SmartThingsCommunity

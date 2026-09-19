@@ -165,10 +165,10 @@ function commax_driver:sync_child_devices(bridge_device)
   if enable_elevator then
     local dni = "commax:elevator:1"
     if not self:get_device_by_dni(dni) then
-      log.info("[Init] Creating child elevator down-call device")
+      log.info("[Init] Creating child elevator device")
       safe_create_device(self, {
         type = "EDGE_CHILD",
-        label = "코맥스 엘리베이터 하강호출",
+        label = "코맥스 엘리베이터",
         profile = "commax-elevator",
         parent_device_id = bridge_device.id,
         device_network_id = dni
@@ -332,6 +332,8 @@ local function device_init(driver, device)
       end)
     elseif dni == "commax:gas:1" then
       pcall(function() device:emit_event(capabilities.valve.valve.closed()) end)
+    elseif dni == "commax:elevator:1" then
+      pcall(function() device:emit_event(capabilities.elevatorCall.callStatus.standby()) end)
     end
   end
 end
@@ -460,8 +462,11 @@ commax_driver.capability_handlers = {
   [capabilities.refresh.ID] = {
     [capabilities.refresh.commands.refresh.NAME] = handler.handle_refresh,
   },
+  [capabilities.elevatorCall.ID] = {
+    [capabilities.elevatorCall.commands.call.NAME] = handler.handle_elevator_call,
+  },
   [capabilities.momentary.ID] = {
-    [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call_down,
+    [capabilities.momentary.commands.push.NAME] = handler.handle_elevator_call,
   }
 }
 

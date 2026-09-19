@@ -37,6 +37,8 @@ function handler.handle_parsed_packet(driver, parsed)
     target_dni = "commax:airquality:1"
   elseif parsed.device_type == "outlet" then
     target_dni = string.format("commax:outlet:%d", parsed.id)
+  elseif parsed.device_type == "elevator_status" then
+    target_dni = "commax:elevator:1"
   end
 
   if not target_dni then return end
@@ -109,6 +111,23 @@ function handler.handle_parsed_packet(driver, parsed)
       device:emit_event(capabilities.switch.switch.on())
     else
       device:emit_event(capabilities.switch.switch.off())
+    end
+
+  -- 7. Elevator Status Event
+  elseif parsed.device_type == "elevator_status" then
+    device:emit_event(capabilities.elevatorCall.callStatus.called())
+    -- Reset to standby if no more status packets arrive in 4 seconds
+    if handler._elevator_reset_timer and driver and driver.cancel_timer then
+      driver:cancel_timer(handler._elevator_reset_timer)
+    end
+    if driver and driver.call_with_delay then
+      handler._elevator_reset_timer = driver:call_with_delay(4, function()
+        handler._elevator_reset_timer = nil
+        local dev = driver:get_device_by_dni("commax:elevator:1")
+        if dev then
+          dev:emit_event(capabilities.elevatorCall.callStatus.standby())
+        end
+      end)
     end
   end
 end
@@ -193,9 +212,18 @@ function handler.handle_fan_speed(driver, device, command)
     device:emit_event(capabilities.fanSpeed.fanSpeed(0))
     safe_send(driver, protocol.build_fan_power(fan_id, false), protocol.ack_fan_off())
   else
+    local clamped_speed = math.max(1, math.min(3, math.floor(speed)))
     device:emit_event(capabilities.switch.switch.on())
-    device:emit_event(capabilities.fanSpeed.fanSpeed(speed))
-    safe_send(driver, protocol.build_fan_speed(fan_id, speed), protocol.ack_fan_speed())
+    device:emit_event(capabilities.fanSpeed.fanSpeed(clamped_speed))
+
+    -- Commax wallpad ignores speed changes when fan power is OFF.
+    -- If fan is not currently ON, send Power ON first so EW11 serial queue
+    -- waits for Power ON ACK before transmitting the speed change packet.
+    local current_switch = (device.get_latest_state and device:get_latest_state("main", capabilities.switch.ID, capabilities.switch.switch.NAME))
+    if current_switch ~= "on" then
+      safe_send(driver, protocol.build_fan_power(fan_id, true), protocol.ack_fan_on())
+    end
+    safe_send(driver, protocol.build_fan_speed(fan_id, clamped_speed), protocol.ack_fan_speed())
   end
 end
 
@@ -243,21 +271,40 @@ function handler.handle_valve_open(driver, device, command)
   device:emit_event(capabilities.valve.valve.closed())
 end
 
---- Elevator down-call is a momentary button.
-function handler.handle_elevator_call_down(driver, device, command)
-  log.info("[Handler] Elevator down-call requested")
+--- Elevator call command (SmartThings elevatorCall capability)
+function handler.handle_elevator_call(driver, device, command)
+  log.info("[Handler] Elevator call requested")
+  if device and device.emit_event then
+    device:emit_event(capabilities.elevatorCall.callStatus.called())
+  end
+
   local packet = protocol.build_elevator_call_down()
-  local ack = protocol.ack_elevator_call_down()
 
   local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
   local prefs = (bridge and bridge.preferences) or {}
   local repeat_cnt = math.max(1, math.min(5, tonumber(prefs.elevatorCallCount) or 2))
 
-  log.info(string.format("[Handler] Enqueuing %d elevator down-call packet(s)", repeat_cnt))
+  log.info(string.format("[Handler] Transmitting %d elevator down-call packet(s) burst (no ACK blocking)", repeat_cnt))
   for _ = 1, repeat_cnt do
-    safe_send(driver, packet, ack)
+    safe_send(driver, packet, nil)
+  end
+
+  -- Fallback auto-reset to standby after 10s if wallpad 0x23 packets don't take over
+  if handler._elevator_reset_timer and driver and driver.cancel_timer then
+    driver:cancel_timer(handler._elevator_reset_timer)
+  end
+  if driver and driver.call_with_delay then
+    handler._elevator_reset_timer = driver:call_with_delay(10, function()
+      handler._elevator_reset_timer = nil
+      if device and device.emit_event then
+        device:emit_event(capabilities.elevatorCall.callStatus.standby())
+      end
+    end)
   end
 end
+
+-- Backward compatibility alias
+handler.handle_elevator_call_down = handler.handle_elevator_call
 
 function handler.handle_refresh(driver, device, command)
   local dni = get_effective_dni(device)
@@ -272,6 +319,8 @@ function handler.handle_refresh(driver, device, command)
   elseif dni:match("^commax:outlet:(%d+)$") then
     local outlet_id = tonumber(dni:match("^commax:outlet:(%d+)$"))
     safe_send(driver, protocol.build_outlet_query(outlet_id))
+  elseif dni == "commax:elevator:1" then
+    device:emit_event(capabilities.elevatorCall.callStatus.standby())
   elseif dni == "commax-bridge" then
     local ok, err = pcall(function() driver:sync_child_devices(device) end)
     if not ok then
