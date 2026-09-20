@@ -484,8 +484,13 @@ do
   print("[PASS] Poll queue: sized to hold a full poll_all_devices() sweep without dropping")
 end
 
--- 10. Elevator burst transmission: atomic burst of packets (15ms delay)
--- and ACK matching / retry / on_fail rollback.
+-- 10. Elevator two-step handshake: TX #1 -> ACK #1 -> TX #2 -> ACK #2,
+-- matching the real EW11 capture. This used to be a blind back-to-back
+-- burst (both packets fired ~15ms apart with no ACK in between, then a
+-- single ACK satisfying the whole thing) - real hardware traffic showed
+-- two separate TX/ACK exchanges instead, and the blind burst is why
+-- elevator calls were unreliable while every other ACK-gated command
+-- (light/outlet/thermostat, all single-step) worked fine.
 do
   local fake_sock = make_fake_sock()
   local ack_called = false
@@ -499,6 +504,7 @@ do
 
   local elevator_pkt = hex_to_bin("22 01 40 07 00 00 00 6A")
   local ack_prefix = { 0xA2, 0x01, 0x01 }
+  local wallpad_ack = hex_to_bin("A2 01 01 00 00 00 00 A4")
 
   ew11:send(elevator_pkt, ack_prefix, {
     tag = "elevator",
@@ -508,24 +514,34 @@ do
     on_fail = function() fail_called = true end,
   })
 
-  assert(#ew11.tx_queue == 1, "Single atomic burst job should be queued")
+  assert(#ew11.tx_queue == 1, "A single two-step job should be queued, not two separate packets")
   ew11:_tx_queue_tick()
 
-  -- Should transmit 2 packets in burst
-  assert(#fake_sock.sent == 2, string.format("Expected 2 packets in burst, got %d", #fake_sock.sent))
-  assert(fake_sock.sent[1] == elevator_pkt, "First packet matches elevator call")
-  assert(fake_sock.sent[2] == elevator_pkt, "Second packet matches elevator call")
-  assert(ew11.pending ~= nil, "Job should be pending ACK")
+  -- Only TX #1 goes out - the driver must NOT fire TX #2 before ACK #1 arrives.
+  assert(#fake_sock.sent == 1, string.format("Expected only TX #1 sent before ACK #1, got %d", #fake_sock.sent))
+  assert(fake_sock.sent[1] == elevator_pkt, "TX #1 matches the real-capture-confirmed elevator packet")
+  assert(ew11.pending ~= nil, "Job must be pending ACK #1")
+  assert(ew11.pending.burst_step == 1, "burst_step must be 1 while waiting for ACK #1")
+  assert(ack_called == false, "on_ack must not fire until the FINAL step's ACK arrives")
 
-  -- Simulate ACK received
-  local wallpad_ack = hex_to_bin("A2 01 01 00 00 00 00 A4")
+  -- ACK #1 arrives -> TX #2 must go out immediately, handshake still not complete
   ew11:_check_ack(wallpad_ack)
-  assert(ack_called == true, "on_ack callback should have been called")
-  assert(ew11.pending == nil, "pending job cleared after ACK")
+  assert(#fake_sock.sent == 2, "ACK #1 must trigger TX #2, not complete the call")
+  assert(fake_sock.sent[2] == elevator_pkt, "TX #2 matches the same real-capture-confirmed packet")
+  assert(ew11.pending ~= nil, "Job must still be pending after ACK #1 - waiting for ACK #2 now")
+  assert(ew11.pending.burst_step == 2, "burst_step must advance to 2 after ACK #1")
+  assert(ack_called == false, "on_ack must still not fire after only ACK #1")
 
-  print("[PASS] Elevator burst: 2 packets transmitted atomically and ACK matched")
+  -- ACK #2 arrives -> NOW the call is complete
+  ew11:_check_ack(wallpad_ack)
+  assert(#fake_sock.sent == 2, "ACK #2 must not trigger any further transmission")
+  assert(ack_called == true, "on_ack must fire once ACK #2 (the final step) is matched")
+  assert(ew11.pending == nil, "pending job cleared only after the FINAL ack")
 
-  -- Test retry burst and on_fail callback
+  print("[PASS] Elevator handshake: TX #1 -> ACK #1 -> TX #2 -> ACK #2 -> complete (no blind burst)")
+
+  -- Timeout on step 1 (before any ACK): existing retry policy applies to
+  -- the single in-flight step, TX #2 must never be sent.
   ack_called = false
   fail_called = false
   fake_sock.sent = {}
@@ -534,30 +550,47 @@ do
     tag = "elevator",
     burst_count = 2,
     burst_delay = 0.015,
+    retry_count = 0,
     on_ack = function() ack_called = true end,
     on_fail = function() fail_called = true end,
   })
-
   ew11:_tx_queue_tick()
-  assert(#fake_sock.sent == 2, "First attempt: 2 packets sent")
+  assert(#fake_sock.sent == 1, "Only TX #1 sent")
 
-  -- Simulate timeout 1: should retry burst
   ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
   ew11:_tx_queue_tick()
-  assert(#fake_sock.sent == 4, "Retry 1: another 2 packets sent (total 4)")
+  assert(fail_called == true, "retry_count=0 -> ACK #1 timeout fails the call immediately")
+  assert(#fake_sock.sent == 1, "TX #2 must never be sent when step 1's ACK never arrived")
+  assert(ew11.pending == nil, "pending cleared after step-1 failure")
 
-  -- Simulate timeout 2: should retry burst (last attempt)
+  print("[PASS] Elevator handshake: ACK #1 timeout fails without ever sending TX #2")
+
+  -- Timeout on step 2 (ACK #1 received, ACK #2 never arrives): existing
+  -- retry policy applies independently to step 2.
+  ack_called = false
+  fail_called = false
+  fake_sock.sent = {}
+
+  ew11:send(elevator_pkt, ack_prefix, {
+    tag = "elevator",
+    burst_count = 2,
+    burst_delay = 0.015,
+    retry_count = 0,
+    on_ack = function() ack_called = true end,
+    on_fail = function() fail_called = true end,
+  })
+  ew11:_tx_queue_tick()
+  ew11:_check_ack(wallpad_ack) -- ACK #1 -> TX #2 sent
+  assert(#fake_sock.sent == 2, "TX #2 sent after ACK #1")
+  assert(ew11.pending.burst_step == 2, "Waiting on ACK #2")
+
   ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
   ew11:_tx_queue_tick()
-  assert(#fake_sock.sent == 6, "Retry 2: another 2 packets sent (total 6)")
+  assert(fail_called == true, "ACK #2 timeout must also fail the call (retry_count=0)")
+  assert(ack_called == false, "on_ack must never fire if the final ACK never arrived")
+  assert(ew11.pending == nil, "pending cleared after step-2 failure")
 
-  -- Simulate timeout 3: retries exhausted -> on_fail
-  ew11.pending.sent_at = socket.gettime() - (ew11.tx_timeout + 0.01)
-  ew11:_tx_queue_tick()
-  assert(fail_called == true, "on_fail callback must be invoked when retries exhausted")
-  assert(ew11.pending == nil, "pending cleared after exhausting retries")
-
-  print("[PASS] Elevator burst retry and on_fail callback verified")
+  print("[PASS] Elevator handshake: ACK #2 timeout fails independently of step 1")
 end
 
 print("=== All EW11 TX Queue / ACK / Disconnect / rx_timeout Tests Passed Successfully! ===")

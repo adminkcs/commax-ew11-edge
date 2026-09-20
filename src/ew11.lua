@@ -245,22 +245,20 @@ function EW11:_write(raw_packet, is_retry)
   return true
 end
 
---- Write a burst of packets with tight inter-packet timing (e.g. elevator down-call: 2 packets ~15ms apart)
-function EW11:_write_burst(job, is_retry)
-  local count = job.burst_count or 1
-  local delay = job.burst_delay or 0.015
+--- Send the next step of a multi-step handshake job (e.g. elevator
+--- down-call: TX #1 -> ACK #1 -> TX #2 -> ACK #2, real captured behavior -
+--- NOT a blind back-to-back burst). `job.burst_step` tracks which step
+--- (1-based) is currently in flight; `_check_ack` advances it on each
+--- matched ACK. Every step transmits the identical packet payload -
+--- confirmed by real EW11 capture, both the command and the ACK are byte-
+--- for-byte the same on each of the two exchanges.
+function EW11:_write_burst_step(job, is_retry)
   if job.tag == "elevator" then
-    log.info(string.format("[ELEVATOR] Transmitting %d-packet burst (%s, delay=%.0fms): %s",
-      count, is_retry and "retry" or "initial", delay * 1000, protocol.to_hex(job.packet)))
+    log.info(string.format("[ELEVATOR] TX #%d/%d sent (%s): %s",
+      job.burst_step or 1, job.burst_count or 1, is_retry and "retry" or "initial",
+      protocol.to_hex(job.packet)))
   end
-  for i = 1, count do
-    local ok = self:_write(job.packet, is_retry)
-    if not ok then return false end
-    if i < count then
-      socket.sleep(delay)
-    end
-  end
-  return true
+  return self:_write(job.packet, is_retry)
 end
 
 --- RS485 is half-duplex. 8 bytes at 9600 baud takes 8.33ms.
@@ -322,18 +320,17 @@ function EW11:_tx_queue_tick()
       else
         local delay = self.pending.tx_delay or self.tx_delay
         if self.pending.tag == "elevator" then
-          log.info(string.format("[ELEVATOR] ACK timeout (%.3fs) -> retrying burst (%d attempts left, delay=%.0fms)...",
-            timeout, self.pending.attempts_left, delay * 1000))
+          log.info(string.format(
+            "[ELEVATOR] ACK #%d/%d timeout (%.3fs) -> retrying step (%d attempts left)...",
+            self.pending.burst_step or 1, self.pending.burst_count or 1, timeout, self.pending.attempts_left))
         else
           log.info(string.format("[EW11] ACK timeout (%.3fs) -> retrying (%d attempts left)...",
             timeout, self.pending.attempts_left))
         end
         socket.sleep(delay)
-        if self.pending.burst_count and self.pending.burst_count > 1 then
-          self:_write_burst(self.pending, true)
-        else
-          self:_write(self.pending.packet, true)
-        end
+        -- Retrying only re-sends the CURRENT handshake step, never the
+        -- whole multi-step sequence - see _write_burst_step comment.
+        self:_write_burst_step(self.pending, true)
         self.pending.sent_at = socket.gettime()
       end
     end
@@ -363,16 +360,20 @@ function EW11:_tx_queue_tick()
     end
 
     table.remove(queue, 1)
-    local write_ok = false
     if job.burst_count and job.burst_count > 1 then
-      write_ok = self:_write_burst(job, false)
-    else
-      write_ok = self:_write(job.packet, false)
+      job.burst_step = 1
     end
+    local write_ok = self:_write_burst_step(job, false)
     if write_ok then
       if job.ack_prefix then
         job.sent_at = socket.gettime()
         self.pending = job
+      elseif job.burst_count and job.burst_count > 1 then
+        -- No ACK to gate progression on - nothing to wait for, so the
+        -- remaining steps can't be sequenced. Not used by any current
+        -- caller (elevator always supplies ack_prefix); logged in case a
+        -- future caller hits this so it's not silently a no-op.
+        log.warn("[EW11] Multi-step job has no ack_prefix - only step 1 was sent, remaining steps skipped")
       end
     end
   end
@@ -397,13 +398,33 @@ function EW11:_check_ack(raw_bytes)
   for i = 1, #prefix do
     if string.byte(raw_bytes, i) ~= prefix[i] then return end
   end
-  if self.pending.tag == "elevator" then
-    log.info(string.format("[ELEVATOR] ACK matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
+  local job = self.pending
+  local step = job.burst_step or 1
+  local total = job.burst_count or 1
+
+  if job.tag == "elevator" then
+    log.info(string.format("[ELEVATOR] ACK #%d/%d matched for %s (RX %s)",
+      step, total, protocol.to_hex(job.packet), protocol.to_hex(raw_bytes)))
   else
-    log.info(string.format("[ACK] matched for %s (RX %s)", protocol.to_hex(self.pending.packet), protocol.to_hex(raw_bytes)))
+    log.info(string.format("[ACK] matched for %s (RX %s)", protocol.to_hex(job.packet), protocol.to_hex(raw_bytes)))
   end
-  if self.pending.on_ack then
-    local ok, err = pcall(self.pending.on_ack, self.pending, raw_bytes)
+
+  if total > 1 and step < total then
+    -- This step's ACK confirmed - real captured behavior is a sequential
+    -- handshake (TX #1 -> ACK #1 -> TX #2 -> ACK #2), not a blind burst,
+    -- so only now does the next step's packet go out.
+    job.burst_step = step + 1
+    if job.tag == "elevator" then
+      log.info(string.format("[ELEVATOR] ACK #%d/%d confirmed -> sending TX #%d/%d", step, total, step + 1, total))
+    end
+    socket.sleep(job.burst_delay or 0.015)
+    self:_write_burst_step(job, false)
+    job.sent_at = socket.gettime()
+    return -- self.pending stays set to job; the handshake isn't complete yet
+  end
+
+  if job.on_ack then
+    local ok, err = pcall(job.on_ack, job, raw_bytes)
     if not ok then
       log.error(string.format("[ELEVATOR] on_ack callback error: %s", tostring(err)))
     end
