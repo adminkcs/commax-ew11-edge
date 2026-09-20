@@ -313,7 +313,10 @@ function handler.handle_elevator_call(driver, device, command)
     tag = "elevator",
     burst_count = call_cnt,     -- 반복 전송 횟수: 엘리베이터 호출 반복 전송 설정(elevatorCallCount) 준수 (기본 2회)
     burst_delay = 0.015,        -- 재전송 지연시간: 모니터링 실측 결과 기반 15ms
-    retry_count = 0,            -- 총 전송 횟수를 설정(call_cnt)에 일치시키고 추가 폭풍 재전송 차단
+    retry_count = call_cnt,     -- ACK 유실 시 재시도 횟수도 동일한 설정(elevatorCallCount)을 따름 -
+                                -- 바쁜 RS485 버스에서 단일 스텝의 ACK가 폴링 트래픽과 충돌해
+                                -- 유실되는 경우가 실측으로 확인됐고, retry_count=0이면 그 즉시
+                                -- 호출 전체가 실패했다 (2026-09-20 실캡처로 확인)
     ack_timeout = 1.0,          -- 응답 대기 시간: 모니터링 실측 결과 기반 1000ms (월패드 처리 지연 대응)
     rx_timeout = 0.05,          -- 수신 버퍼 정리시간: 모니터링 실측 결과 기반 50ms
     on_ack = function()
@@ -333,8 +336,8 @@ function handler.handle_elevator_call(driver, device, command)
   }
 
   log.info(string.format(
-    "[ELEVATOR] Enqueueing %d-packet call (delay=15ms, ack_wait=1000ms, rx_buf=50ms) per elevatorCallCount preference",
-    call_cnt))
+    "[ELEVATOR] Enqueueing %d-packet call (delay=15ms, ack_wait=1000ms, rx_buf=50ms, retry=%d) per elevatorCallCount preference",
+    call_cnt, call_cnt))
   safe_send(driver, packet, ack, opts)
 end
 
