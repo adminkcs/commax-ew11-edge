@@ -200,6 +200,46 @@ local protocol = {
   -- twice per press (see handle_elevator_call_down), and elevator_call_ack
   -- is never mapped to a SmartThings device event either way. Batch
   -- on/off is intentionally NOT implemented as a device (not requested).
+  --
+  -- **ELEVATOR CALL DOES NOT ACTUALLY WORK - re-verified 2026-09-21.**
+  -- The "CONFIRMED" above only ever established that this packet/ack was
+  -- observed on the bus at the same time as a working call from a
+  -- different vendor's bridge device - it never established that this
+  -- packet is what CAUSES the call. Real-hardware testing on 2026-09-21
+  -- disproved that:
+  --   - Sending "22 01 40 07 00 00 00 6A" x2 directly to the EW11, with a
+  --     correct ACK-gated sequential handshake (TX1 -> ACK1 -> 15ms ->
+  --     TX2 -> ACK2, both ACKs received cleanly, mirroring exactly what
+  --     ew11.lua does), produced NO "23/A3" follow-up status and no
+  --     physical elevator call. This was reproduced twice.
+  --   - The live driver's own send (2026-09-20 logcat capture) also got
+  --     both ACKs cleanly ("Wallpad ACK received, call confirmed") but was
+  --     never confirmed to have physically called the elevator either.
+  --   - Both real successes (2026-09-17 and 2026-09-20 physical
+  --     confirmations, elevator actually arrived) came only from the
+  --     other vendor's bridge device, and in BOTH captures an unregistered
+  --     header/ack pair "A0 01 01 00 08 15 00 BF" (header 0x20 query /
+  --     0xA0 response, id=01 - normally seen ONLY as a reply to a "20 01
+  --     00 00 00 00 00 21" poll, with idle payload "01 01 00 00 17 00")
+  --     appeared as an UNSOLICITED standalone broadcast (no preceding
+  --     poll) starting ~0.7-1.1s BEFORE the "22/A2" pair, and continued
+  --     appearing alongside it. Replaying that exact "A0 01 01 00 08 15
+  --     00 BF" broadcast directly (2026-09-21) also produced NO reaction
+  --     on the bus (no 22/A2, no 23/A3, nothing).
+  --   - Working conclusion: this Commax RS485 bus most likely is NOT the
+  --     actual channel that dispatches the elevator. The other vendor's
+  --     bridge probably calls the elevator through a separate mechanism
+  --     (e.g. a relay output wired in parallel with the physical call
+  --     button on the elevator panel) and what we see on this bus
+  --     ("22/A2", "20/A0" with 08 15) is incidental/correlated traffic
+  --     from that device, not the actual trigger. Sending either signal
+  --     from this driver gets a valid-looking ACK but does not call the
+  --     elevator. DO NOT trust "ACK received" as proof of a real call
+  --     for this device without independent physical confirmation.
+  -- Next step, if revisited: get the other bridge device's actual wiring/
+  -- spec (does it have a relay output to the elevator panel, or any
+  -- interface besides this RS485 bus?) rather than guessing further
+  -- packets against real building infrastructure.
   CMD_ELEVATOR_CALL_DOWN = { 0x22, 0x01, 0x40, 0x07, 0x00, 0x00, 0x00 },
   ACK_ELEVATOR_CALL_DOWN = { 0xA2, 0x01, 0x01 },
 }
