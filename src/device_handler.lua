@@ -278,36 +278,12 @@ function handler.handle_valve_open(driver, device, command)
   device:emit_event(capabilities.valve.valve.closed())
 end
 
---- Elevator call command (SmartThings elevatorCall capability)
-function handler.handle_elevator_call(driver, device, command)
-  log.info("[ELEVATOR] Down-call requested via SmartThings")
-  if device and device.emit_event then
-    device:emit_event(capabilities.elevatorCall.callStatus.called())
-  end
-
+--- Send the actual ACK-gated down-call burst (packet content confirmed
+--- correct, but only effective when preceded by send_elevator_preamble
+--- below - see ELEVATOR_CALL_PREAMBLE comment in commax_protocol.lua).
+local function send_elevator_call_burst(driver, device, call_cnt)
   local packet = protocol.build_elevator_call_down()
   local ack = protocol.ack_elevator_call_down()
-
-  local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
-  local prefs = (bridge and bridge.preferences) or {}
-  local call_cnt = tonumber(prefs.elevatorCallCount) or 2
-  if call_cnt < 1 then call_cnt = 1 end
-  if call_cnt > 5 then call_cnt = 5 end
-
-  -- Fallback auto-reset to standby after 15s if wallpad 0x23 packets don't take over
-  if handler._elevator_reset_timer and driver and driver.cancel_timer then
-    driver:cancel_timer(handler._elevator_reset_timer)
-  end
-  if driver and driver.call_with_delay then
-    handler._elevator_reset_timer = driver:call_with_delay(15, function()
-      handler._elevator_reset_timer = nil
-      local dev = driver:get_device_by_dni("commax:elevator:1") or device
-      if dev and dev.emit_event then
-        log.info("[ELEVATOR] Timeout fallback: resetting to standby")
-        dev:emit_event(capabilities.elevatorCall.callStatus.standby())
-      end
-    end)
-  end
 
   local opts = {
     tag = "elevator",
@@ -339,6 +315,75 @@ function handler.handle_elevator_call(driver, device, command)
     "[ELEVATOR] Enqueueing %d-packet call (delay=15ms, ack_wait=1000ms, rx_buf=50ms, retry=%d) per elevatorCallCount preference",
     call_cnt, call_cnt))
   safe_send(driver, packet, ack, opts)
+end
+
+-- Preamble gaps CONFIRMED 2026-09-21 by real-hardware capture of a working
+-- call from the other vendor's bridge (down to the millisecond) - see
+-- ELEVATOR_CALL_PREAMBLE comment in commax_protocol.lua. Do not change
+-- without a fresh real capture to compare against.
+local ELEVATOR_PREAMBLE_GAPS = { 0.007, 0.301, 0.309 }
+
+--- Send the elevator call preamble broadcast 4x with the exact captured
+--- gaps, fire-and-forget (no ack expected - see protocol comment), then
+--- invoke on_done (which sends the actual down-call burst). Chained via
+--- call_with_delay rather than a blocking sleep, since this runs in the
+--- capability-command handler, not a cosock coroutine.
+local function send_elevator_preamble(driver, on_done)
+  local preamble = protocol.build_elevator_call_preamble()
+  safe_send(driver, preamble, nil, { tag = "elevator_preamble" })
+
+  local function schedule_next(i)
+    if i > #ELEVATOR_PREAMBLE_GAPS then
+      on_done()
+      return
+    end
+    if driver and driver.call_with_delay then
+      driver:call_with_delay(ELEVATOR_PREAMBLE_GAPS[i], function()
+        safe_send(driver, preamble, nil, { tag = "elevator_preamble" })
+        schedule_next(i + 1)
+      end)
+    else
+      -- No timer support (e.g. a bare test double) - fall back to sending
+      -- the remaining preamble copies immediately rather than dropping them.
+      safe_send(driver, preamble, nil, { tag = "elevator_preamble" })
+      schedule_next(i + 1)
+    end
+  end
+  schedule_next(1)
+end
+
+--- Elevator call command (SmartThings elevatorCall capability)
+function handler.handle_elevator_call(driver, device, command)
+  log.info("[ELEVATOR] Down-call requested via SmartThings")
+  if device and device.emit_event then
+    device:emit_event(capabilities.elevatorCall.callStatus.called())
+  end
+
+  local bridge = driver and driver.get_device_by_dni and driver:get_device_by_dni("commax-bridge")
+  local prefs = (bridge and bridge.preferences) or {}
+  local call_cnt = tonumber(prefs.elevatorCallCount) or 2
+  if call_cnt < 1 then call_cnt = 1 end
+  if call_cnt > 5 then call_cnt = 5 end
+
+  -- Fallback auto-reset to standby after 15s if wallpad 0x23 packets don't take over
+  if handler._elevator_reset_timer and driver and driver.cancel_timer then
+    driver:cancel_timer(handler._elevator_reset_timer)
+  end
+  if driver and driver.call_with_delay then
+    handler._elevator_reset_timer = driver:call_with_delay(15, function()
+      handler._elevator_reset_timer = nil
+      local dev = driver:get_device_by_dni("commax:elevator:1") or device
+      if dev and dev.emit_event then
+        log.info("[ELEVATOR] Timeout fallback: resetting to standby")
+        dev:emit_event(capabilities.elevatorCall.callStatus.standby())
+      end
+    end)
+  end
+
+  log.info("[ELEVATOR] Sending call preamble broadcast (4x, 7/301/309ms gaps) before down-call burst")
+  send_elevator_preamble(driver, function()
+    send_elevator_call_burst(driver, device, call_cnt)
+  end)
 end
 
 -- Backward compatibility alias

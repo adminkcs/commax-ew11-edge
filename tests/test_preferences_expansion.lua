@@ -6,7 +6,7 @@ print("=== Starting Preferences Expansion Unit Tests ===")
 
 -- 1. Test EW11 dynamic timing config & ms-to-sec conversion
 local fake_driver = {
-  call_with_delay = function(self, delay, cb) end,
+  call_with_delay = function(self, delay, cb) if cb then cb() end end,
   get_devices = function(self) return {} end,
   get_device_by_dni = function(self, dni) return nil end,
 }
@@ -62,11 +62,17 @@ fake_driver.get_device_by_dni = function(self, dni)
 end
 
 handler.handle_elevator_call_down(fake_driver, { device_network_id = "commax:elevator:1" }, {})
-assert(#enqueued == 1, string.format("Expected 1 atomic burst job enqueued, got %d", #enqueued))
-assert(enqueued[1].opts and enqueued[1].opts.burst_count == 3, string.format("Expected burst_count 3, got %s", tostring(enqueued[1].opts and enqueued[1].opts.burst_count)))
-assert(enqueued[1].opts and enqueued[1].opts.burst_delay == 0.015, "Expected burst_delay 0.015s")
-assert(enqueued[1].opts and enqueued[1].opts.tag == "elevator", "Expected tag 'elevator'")
-print("[PASS] Elevator call repeat count (atomic 3-packet burst)")
+-- 4 preamble broadcasts (fire-and-forget, no ack) + 1 atomic burst job for the actual down-call
+assert(#enqueued == 5, string.format("Expected 4 preamble sends + 1 burst job enqueued, got %d", #enqueued))
+for i = 1, 4 do
+  assert(enqueued[i].ack == nil, string.format("Preamble send #%d should be fire-and-forget (no ack)", i))
+  assert(enqueued[i].opts and enqueued[i].opts.tag == "elevator_preamble", string.format("Preamble send #%d should be tagged 'elevator_preamble'", i))
+end
+local call_job = enqueued[5]
+assert(call_job.opts and call_job.opts.burst_count == 3, string.format("Expected burst_count 3, got %s", tostring(call_job.opts and call_job.opts.burst_count)))
+assert(call_job.opts and call_job.opts.burst_delay == 0.015, "Expected burst_delay 0.015s")
+assert(call_job.opts and call_job.opts.tag == "elevator", "Expected tag 'elevator'")
+print("[PASS] Elevator call repeat count (preamble + atomic 3-packet burst)")
 
 -- 4. Test Child Device sync with enable flags via init.lua driver
 require("init")

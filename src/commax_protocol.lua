@@ -242,6 +242,22 @@ local protocol = {
   -- packets against real building infrastructure.
   CMD_ELEVATOR_CALL_DOWN = { 0x22, 0x01, 0x40, 0x07, 0x00, 0x00, 0x00 },
   ACK_ELEVATOR_CALL_DOWN = { 0xA2, 0x01, 0x01 },
+
+  -- Elevator call "preamble" broadcast - CONFIRMED 2026-09-21 by a live
+  -- replay test on real hardware. See the long comment above: sending
+  -- "22/A2" alone (even cleanly ACK-confirmed, twice, with correct
+  -- sequential handshake) never called the elevator. Replaying this
+  -- EXACT byte sequence - captured verbatim from a real successful call
+  -- by the other vendor's bridge - as an unsolicited broadcast (normally
+  -- this header/payload is seen ONLY as a reply to a "20 01 00 00 00 00
+  -- 00 21" poll, with idle payload "01 01 00 00 17 00") sent 4 times with
+  -- ~7ms/301ms/309ms gaps, immediately followed by the existing 22/A2
+  -- down-call burst, DID work: "23/A3" status followed and the elevator
+  -- physically arrived (confirmed live). The meaning of "08 15" is still
+  -- unknown (copied verbatim from the real capture, not derived from a
+  -- documented protocol) - do not alter these bytes without a fresh
+  -- real-hardware capture to compare against.
+  ELEVATOR_CALL_PREAMBLE = { 0xA0, 0x01, 0x01, 0x00, 0x08, 0x15, 0x00 },
 }
 
 --- Calculate 8-bit sum checksum for bytes 1..7
@@ -365,6 +381,14 @@ end
 --- CONFIRMED 2026-09-17 by real capture (see CMD_ELEVATOR_CALL_DOWN comment above).
 function protocol.build_elevator_call_down()
   local p = protocol.CMD_ELEVATOR_CALL_DOWN
+  return protocol.build_packet(p[1], p[2], p[3], p[4], p[5], p[6], p[7])
+end
+
+--- Build the elevator call preamble broadcast (see ELEVATOR_CALL_PREAMBLE
+--- comment above) - must be sent 4x with specific gaps before the actual
+--- down-call burst, or the call has no real-world effect.
+function protocol.build_elevator_call_preamble()
+  local p = protocol.ELEVATOR_CALL_PREAMBLE
   return protocol.build_packet(p[1], p[2], p[3], p[4], p[5], p[6], p[7])
 end
 
