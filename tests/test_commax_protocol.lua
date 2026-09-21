@@ -207,23 +207,6 @@ assert(res_pm10 and res_pm10.device_type == "pm10", "Parse PM10 sensor packet")
 assert(res_pm10.ug_m3 == 488, "PM10 should be 488 (BCD bytes 4-5)")
 print("[PASS] Parse PM10 Sensor (488, real-capture-corrected)")
 
--- PM2.5/PM10 sub-byte ALT variant (0x21/0x2F instead of 0x11/0x1F) -
--- CONFIRMED 2026-09-22 by a real 90s capture from this project's own EW11:
--- this household's wallpad uses 0x21/0x2F, not 0x11/0x1F, and without
--- matching this variant the parser fell through to "Unknown packet
--- header", leaving PM2.5/PM10 permanently NaN in SmartThings.
-local pm25_alt_pkt = hex_to_bin("C8 21 01 07 66 00 01 58")
-local res_pm25_alt = protocol.parse_packet(pm25_alt_pkt)
-assert(res_pm25_alt and res_pm25_alt.device_type == "pm25", "Parse PM2.5 sensor packet (0x21 alt sub-byte)")
-assert(res_pm25_alt.ug_m3 == 766, "PM2.5 (alt) should be 766 (BCD bytes 4-5)")
-print("[PASS] Parse PM2.5 Sensor, alt sub-byte 0x21 (766, real-capture-confirmed)")
-
-local pm10_alt_pkt = hex_to_bin("C8 2F 01 07 66 00 01 66")
-local res_pm10_alt = protocol.parse_packet(pm10_alt_pkt)
-assert(res_pm10_alt and res_pm10_alt.device_type == "pm10", "Parse PM10 sensor packet (0x2F alt sub-byte)")
-assert(res_pm10_alt.ug_m3 == 766, "PM10 (alt) should be 766 (BCD bytes 4-5)")
-print("[PASS] Parse PM10 Sensor, alt sub-byte 0x2F (766, real-capture-confirmed)")
-
 -- Outlet State: F9 10 01 10 00 00 00 1A (OFF) / F9 11 01 10 00 00 00 1B (ON)
 -- CONFIRMED 2026-09-17 by real command/ack/state correlation on our bus.
 local outlet_off_pkt = hex_to_bin("F9 10 01 10 00 00 00 1A")
