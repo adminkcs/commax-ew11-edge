@@ -187,6 +187,17 @@ assert(res_co2 and res_co2.device_type == "co2", "Parse CO2 sensor packet")
 assert(res_co2.ppm == 1313, "CO2 should be 1313 ppm")
 print("[PASS] Parse CO2 Sensor (1313 ppm, real-capture-confirmed)")
 
+-- CO2 Sensor, ALT sub-byte 0x80 (not 0x82): F7 80 01 00 1B 07 54 EE
+-- CONFIRMED 2026-09-22 by real EW11 capture: this household's wallpad
+-- broadcasts CO2 with sub-byte 0x80, not 0x82 - without matching this,
+-- CO2 silently stopped updating (see CO2_SUB1_ALT comment in
+-- commax_protocol.lua).
+local co2_alt_pkt = hex_to_bin("F7 80 01 00 1B 07 54 EE")
+local res_co2_alt = protocol.parse_packet(co2_alt_pkt)
+assert(res_co2_alt and res_co2_alt.device_type == "co2", "Parse CO2 sensor packet (0x80 alt sub-byte)")
+assert(res_co2_alt.ppm == 754, "CO2 (alt) should be 754 ppm")
+print("[PASS] Parse CO2 Sensor, alt sub-byte 0x80 (754 ppm, real-capture-confirmed)")
+
 -- PM2.5 Sensor: C8 11 01 04 88 00 01 67
 -- CORRECTED 2026-09-19: taken from tools/capture_20260917_175929.log, a
 -- real 45-minute EW11 capture that never contains the previously-coded

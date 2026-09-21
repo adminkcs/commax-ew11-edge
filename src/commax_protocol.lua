@@ -118,6 +118,17 @@ local protocol = {
   -- bytes before checksum) decoded as one 2-byte BCD number
   -- (bcd.decode_word).
   --
+  -- CO2 sub-byte ALT variant CONFIRMED 2026-09-22 by real capture: this
+  -- household's wallpad is now broadcasting "F7 80 01 00 1B 07 54 EE"
+  -- (sub-byte 0x80, not 0x82) every ~5s - same b[3]=0x01 and same value
+  -- position (bytes 6-7, BCD, decodes to a plausible ppm reading), just
+  -- the CO2_SUB1 byte itself drifted. Same class of issue as the dust
+  -- sensor 0x11/0x1F -> 0x21/0x2F drift below: the wallpad's actual
+  -- broadcast value changed (not a driver regression - confirmed via git
+  -- diff that co2 parsing hadn't been touched), and CO2_SUB1's old value
+  -- alone no longer matches, so CO2 silently stopped updating. Both
+  -- values are matched below rather than assuming only one is ever
+  -- correct.
   -- Dust (PM2.5 / PM10): the sub-header bytes 0x31 / 0x3F previously coded
   -- here (by analogy with homenet2mqtt's haatz_air_quality_sensors.yaml,
   -- which uses 0x31 / 0x39) were NEVER actually observed in
@@ -138,6 +149,7 @@ local protocol = {
   -- DUST_PM25/DUST_PM10 below if backwards.
   HEAD_CO2         = 0xF7,
   CO2_SUB1         = 0x82,
+  CO2_SUB1_ALT     = 0x80,
   CO2_SUB2         = 0x01,
   HEAD_DUST        = 0xC8,
   DUST_PM25        = 0x11,
@@ -566,11 +578,16 @@ function protocol.parse_packet(raw_bytes)
       raw = raw_bytes
     }
 
-  -- 5. CO2 Sensor (0xF7 0x82 0x01 ...) - read-only, no command exists
-  -- Packet: [0xF7, 0x82, 0x01, 0x00, 0x1A, CO2_hi(BCD), CO2_lo(BCD), CS]
+  -- 5. CO2 Sensor (0xF7 0x82/0x80 0x01 ...) - read-only, no command exists
+  -- Packet: [0xF7, sub, 0x01, 0x00, 0x1A, CO2_hi(BCD), CO2_lo(BCD), CS]
   -- CONFIRMED 2026-09-17 by real EW11 capture matched live against the
-  -- wallpad display (see HEAD_CO2 comment above).
-  elseif head == protocol.HEAD_CO2 and b[2] == protocol.CO2_SUB1 and b[3] == protocol.CO2_SUB2 then
+  -- wallpad display (see HEAD_CO2 comment above). Sub-byte matching
+  -- widened 2026-09-22 to also accept 0x80 (see CO2_SUB1_ALT comment
+  -- above) - without this, this household's CO2 packets stopped matching
+  -- and CO2 silently stopped updating in SmartThings.
+  elseif head == protocol.HEAD_CO2
+      and (b[2] == protocol.CO2_SUB1 or b[2] == protocol.CO2_SUB1_ALT)
+      and b[3] == protocol.CO2_SUB2 then
     return {
       device_type = "co2",
       id = 1,
