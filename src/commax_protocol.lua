@@ -137,16 +137,26 @@ local protocol = {
   -- SmartThings despite CO2 working fine (0xF7 packets DO appear in that
   -- log). What the log actually contains, 27 times, is header 0xC8 with
   -- sub-byte 0x11 or 0x1F (never 0x31/0x3F), e.g.
-  -- "C8 11 01 04 88 00 01 67" / "C8 1F 01 04 88 00 01 75". Across all 27
-  -- occurrences, bytes 6-7 are constant ("00 01") while bytes 4-5 drift
-  -- slowly (04 83 .. 05 08) - the opposite of what the old code assumed -
-  -- so the real value field is bytes 4-5, not 6-7.
-  -- CORRECTED here to match that real capture. Still UNVERIFIED: which of
-  -- 0x11 / 0x1F is PM2.5 vs PM10 - both drifted almost identically over
-  -- the whole capture, so magnitude can't disambiguate them. Assigned by
-  -- analogy with the old (lower-byte=PM2.5, higher-byte=PM10) convention;
-  -- please confirm against the wallpad's own PM2.5/PM10 display and swap
-  -- DUST_PM25/DUST_PM10 below if backwards.
+  -- "C8 11 01 04 88 00 01 67" / "C8 1F 01 04 88 00 01 75".
+  --
+  -- VALUE BYTE POSITION CORRECTED BACK TO 6-7, 2026-09-26. The
+  -- 2026-09-19 note above ("bytes 6-7 constant, bytes 4-5 drift, so the
+  -- real value must be bytes 4-5") had it backwards. Confirmed by a live
+  -- side-by-side check against the wallpad's own PM2.5 display (showing
+  -- "1"): a fresh real capture, "C8 11 01 05 00 00 01 E0", decodes bytes
+  -- 6-7 ("00 01") to exactly 1 - matching the wallpad - while bytes 4-5
+  -- ("05 00") decode to 500, wildly implausible for indoor air. Every
+  -- captured dust packet across all sessions (2026-09-17, 2026-09-22,
+  -- 2026-09-26) has had "00 01" in bytes 6-7 - that consistency isn't
+  -- evidence it's the wrong field, it's this household's real PM2.5
+  -- reading having stayed at 1 the whole time (clean air). Bytes 4-5
+  -- drifting is some other, unidentified field - not the dust reading.
+  -- Still UNVERIFIED: which of 0x11 / 0x1F is PM2.5 vs PM10 - both have
+  -- always carried the same "00 01" value in every capture so magnitude
+  -- can't disambiguate them either. Assigned by analogy with the old
+  -- (lower-byte=PM2.5, higher-byte=PM10) convention; PM10 is no longer
+  -- exposed by this driver anyway (see device_handler.lua/README - this
+  -- household has no physical PM10 sensor).
   --
   -- SECOND sub-byte variant CONFIRMED 2026-09-22 by real capture (90s,
   -- this project's own EW11): this specific home's wallpad broadcasts
@@ -161,6 +171,9 @@ local protocol = {
   -- report that only one physical PM2.5 sensor exists and the wallpad
   -- just echoes the same reading into the PM10 slot; that's wallpad
   -- behavior, not something this parser can or should compensate for.
+  -- (With the byte position corrected 2026-09-26 to 6-7, this sample's
+  -- actual reading is "00 01" = 1, not "07 66" = 766 as first assumed;
+  -- "07 66" is the unidentified bytes 4-5 field, not the PM value.)
   HEAD_CO2         = 0xF7,
   CO2_SUB1         = 0x82,
   CO2_SUB1_ALT     = 0x80,
@@ -612,14 +625,15 @@ function protocol.parse_packet(raw_bytes)
     }
 
   -- 6. Dust Sensor: PM2.5 (0xC8 0x11/0x21 0x01 ...) / PM10 (0xC8 0x1F/0x2F 0x01 ...)
-  -- Packet: [0xC8, sub, 0x01, PM_hi(BCD), PM_lo(BCD), 0x00, 0x01, CS]
-  -- CORRECTED 2026-09-19 against real capture (see DUST_PM25/DUST_PM10
-  -- comment above) - value moved from bytes 6-7 to bytes 4-5. Sub-byte
-  -- matching widened 2026-09-22 to also accept the 0x21/0x2F variant
-  -- (see DUST_PM25_ALT/DUST_PM10_ALT comment above) - without this, this
-  -- household's dust packets never matched any case here and fell through
-  -- to "Unknown packet header", which is why PM2.5/PM10 stayed NaN in
-  -- SmartThings despite CO2 (different header) working fine.
+  -- Packet: [0xC8, sub, 0x01, 0x00, 0x00, 0x00, PM_hi(BCD), PM_lo(BCD), CS]
+  -- (byte layout re-CORRECTED 2026-09-26 back to bytes 6-7 - see
+  -- HEAD_DUST/DUST_PM25 comment above for why the 2026-09-19 move to
+  -- bytes 4-5 was wrong). Sub-byte matching widened 2026-09-22 to also
+  -- accept the 0x21/0x2F variant (see DUST_PM25_ALT/DUST_PM10_ALT comment
+  -- above) - without this, this household's dust packets never matched
+  -- any case here and fell through to "Unknown packet header", which is
+  -- why PM2.5/PM10 stayed NaN in SmartThings despite CO2 (different
+  -- header) working fine.
   elseif head == protocol.HEAD_DUST and b[3] == protocol.DUST_SUB2
       and (b[2] == protocol.DUST_PM25 or b[2] == protocol.DUST_PM25_ALT
         or b[2] == protocol.DUST_PM10 or b[2] == protocol.DUST_PM10_ALT) then
@@ -627,7 +641,7 @@ function protocol.parse_packet(raw_bytes)
     return {
       device_type = is_pm25 and "pm25" or "pm10",
       id = 1,
-      ug_m3 = bcd.decode_word(b[4], b[5]),
+      ug_m3 = bcd.decode_word(b[6], b[7]),
       raw = raw_bytes
     }
 

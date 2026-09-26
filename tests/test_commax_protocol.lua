@@ -199,24 +199,25 @@ assert(res_co2_alt.ppm == 754, "CO2 (alt) should be 754 ppm")
 print("[PASS] Parse CO2 Sensor, alt sub-byte 0x80 (754 ppm, real-capture-confirmed)")
 
 -- PM2.5 Sensor: C8 11 01 04 88 00 01 67
--- CORRECTED 2026-09-19: taken from tools/capture_20260917_175929.log, a
--- real 45-minute EW11 capture that never contains the previously-coded
--- 0x31/0x3F sub-headers at all, but does contain 0x11/0x1F 27 times with
--- the value in bytes 4-5 (see commax_protocol.lua DUST_PM25 comment).
+-- Value byte position CORRECTED 2026-09-26 back to bytes 6-7 ("00 01" = 1)
+-- after a live side-by-side check against the wallpad's own PM2.5 display
+-- (see commax_protocol.lua DUST_PM25 comment for the full story - the
+-- 2026-09-19 move to bytes 4-5 had it backwards).
 local pm25_pkt = hex_to_bin("C8 11 01 04 88 00 01 67")
 local res_pm25, err_pm25 = protocol.parse_packet(pm25_pkt)
 assert(res_pm25 and res_pm25.device_type == "pm25", "Parse PM2.5 sensor packet")
-assert(res_pm25.ug_m3 == 488, "PM2.5 should be 488 (BCD bytes 4-5)")
-print("[PASS] Parse PM2.5 Sensor (488, real-capture-corrected)")
+assert(res_pm25.ug_m3 == 1, "PM2.5 should be 1 (BCD bytes 6-7)")
+print("[PASS] Parse PM2.5 Sensor (1, real-capture-corrected)")
 
 -- PM10 Sensor: C8 1F 01 04 88 00 01 75
--- CORRECTED 2026-09-19, see PM2.5 note above. PM2.5-vs-PM10 assignment
--- between 0x11/0x1F is still unverified - see comment in commax_protocol.lua.
+-- Same byte-position correction as PM2.5 above. PM2.5-vs-PM10 assignment
+-- between 0x11/0x1F is still unverified - see comment in commax_protocol.lua
+-- (though PM10 is no longer exposed by this driver - no physical sensor).
 local pm10_pkt = hex_to_bin("C8 1F 01 04 88 00 01 75")
 local res_pm10, err_pm10 = protocol.parse_packet(pm10_pkt)
 assert(res_pm10 and res_pm10.device_type == "pm10", "Parse PM10 sensor packet")
-assert(res_pm10.ug_m3 == 488, "PM10 should be 488 (BCD bytes 4-5)")
-print("[PASS] Parse PM10 Sensor (488, real-capture-corrected)")
+assert(res_pm10.ug_m3 == 1, "PM10 should be 1 (BCD bytes 6-7)")
+print("[PASS] Parse PM10 Sensor (1, real-capture-corrected)")
 
 -- PM2.5/PM10 sub-byte ALT variant (0x21/0x2F instead of 0x11/0x1F) -
 -- CONFIRMED 2026-09-22 by a real 90s capture from this project's own EW11:
@@ -226,14 +227,24 @@ print("[PASS] Parse PM10 Sensor (488, real-capture-corrected)")
 local pm25_alt_pkt = hex_to_bin("C8 21 01 07 66 00 01 58")
 local res_pm25_alt = protocol.parse_packet(pm25_alt_pkt)
 assert(res_pm25_alt and res_pm25_alt.device_type == "pm25", "Parse PM2.5 sensor packet (0x21 alt sub-byte)")
-assert(res_pm25_alt.ug_m3 == 766, "PM2.5 (alt) should be 766 (BCD bytes 4-5)")
-print("[PASS] Parse PM2.5 Sensor, alt sub-byte 0x21 (766, real-capture-confirmed)")
+assert(res_pm25_alt.ug_m3 == 1, "PM2.5 (alt) should be 1 (BCD bytes 6-7)")
+print("[PASS] Parse PM2.5 Sensor, alt sub-byte 0x21 (1, real-capture-confirmed)")
 
 local pm10_alt_pkt = hex_to_bin("C8 2F 01 07 66 00 01 66")
 local res_pm10_alt = protocol.parse_packet(pm10_alt_pkt)
 assert(res_pm10_alt and res_pm10_alt.device_type == "pm10", "Parse PM10 sensor packet (0x2F alt sub-byte)")
-assert(res_pm10_alt.ug_m3 == 766, "PM10 (alt) should be 766 (BCD bytes 4-5)")
-print("[PASS] Parse PM10 Sensor, alt sub-byte 0x2F (766, real-capture-confirmed)")
+assert(res_pm10_alt.ug_m3 == 1, "PM10 (alt) should be 1 (BCD bytes 6-7)")
+print("[PASS] Parse PM10 Sensor, alt sub-byte 0x2F (1, real-capture-confirmed)")
+
+-- PM2.5, fresh 2026-09-26 capture: C8 11 01 05 00 00 01 E0 - CONFIRMED
+-- live against the wallpad's own display, which showed PM2.5=1 at the
+-- exact same moment. This is the packet that proved bytes 4-5 (05 00 ->
+-- 500) was the wrong field and bytes 6-7 (00 01 -> 1) is correct.
+local pm25_fresh_pkt = hex_to_bin("C8 11 01 05 00 00 01 E0")
+local res_pm25_fresh = protocol.parse_packet(pm25_fresh_pkt)
+assert(res_pm25_fresh and res_pm25_fresh.device_type == "pm25", "Parse PM2.5 sensor packet (2026-09-26 fresh capture)")
+assert(res_pm25_fresh.ug_m3 == 1, "PM2.5 should be 1, matching the wallpad's own display at capture time")
+print("[PASS] Parse PM2.5 Sensor, 2026-09-26 fresh capture (1, wallpad-display-confirmed)")
 
 -- Outlet State: F9 10 01 10 00 00 00 1A (OFF) / F9 11 01 10 00 00 00 1B (ON)
 -- CONFIRMED 2026-09-17 by real command/ack/state correlation on our bus.
