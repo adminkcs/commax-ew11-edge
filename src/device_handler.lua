@@ -43,10 +43,28 @@ function handler.handle_parsed_packet(driver, parsed)
 
   if not target_dni then return end
 
+  -- Scoped diagnostic logging for air quality only (CO2/PM2.5/PM10 have no
+  -- ACK/poll path to confirm success, so this is the only way to tell
+  -- "device not found" apart from "found but emit had no visible effect" -
+  -- added 2026-09-26 while chasing reports of CO2/PM staying blank/NaN.
+  -- Deliberately gated on device_type so no other device's logging changes.
+  local is_air_quality = (parsed.device_type == "co2" or parsed.device_type == "pm25" or parsed.device_type == "pm10")
+  if is_air_quality then
+    log.info(string.format("[AirQuality] Parsed packet: type=%s dni=%s ppm=%s ug_m3=%s",
+      tostring(parsed.device_type), tostring(target_dni), tostring(parsed.ppm), tostring(parsed.ug_m3)))
+  end
+
   local device = driver:get_device_by_dni(target_dni)
   if not device then
+    if is_air_quality then
+      log.warn(string.format("[AirQuality] Child device NOT FOUND for dni=%s (type=%s) - device tile may not be created/enabled", tostring(target_dni), tostring(parsed.device_type)))
+    end
     -- Device tile might not be created or enabled
     return
+  end
+
+  if is_air_quality then
+    log.info(string.format("[AirQuality] Child device found: %s (label=%s)", tostring(target_dni), tostring(device.label)))
   end
 
   -- 1. Light Event
@@ -110,10 +128,13 @@ function handler.handle_parsed_packet(driver, parsed)
   -- bus). PM2.5 was previously wired to veryFineDustSensor (the PM1.0
   -- capability) by mistake - fixed here to fineDustSensor.
   elseif parsed.device_type == "co2" then
+    log.info(string.format("[AirQuality] Emitting CO2: %s ppm", tostring(parsed.ppm)))
     device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide({ value = parsed.ppm, unit = "ppm" }))
   elseif parsed.device_type == "pm10" then
+    log.info(string.format("[AirQuality] Emitting PM10: %s ug/m3", tostring(parsed.ug_m3)))
     device:emit_event(capabilities.dustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
   elseif parsed.device_type == "pm25" then
+    log.info(string.format("[AirQuality] Emitting PM2.5: %s ug/m3", tostring(parsed.ug_m3)))
     device:emit_event(capabilities.fineDustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
 
   -- 6. Outlet Event
