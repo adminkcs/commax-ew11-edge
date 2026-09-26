@@ -6,7 +6,7 @@ components:
         version: 1
       - id: dustSensor
         version: 1
-      - id: veryFineDustSensor
+      - id: fineDustSensor
         version: 1
       - id: refresh
         version: 1

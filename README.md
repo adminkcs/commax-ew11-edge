@@ -16,7 +16,7 @@
 | **전열기 / 환기팬 (Fan)** | `commax-fan` (ID 1) | 전열교환기 환기팬 전원 ON/OFF, 풍량(1~3단) 조절 | **안정화 완료** | 전열(0x04) 기본 운전 모드 및 실시간 풍량 연동 안정화 |
 | **엘리베이터 (Elevator)** | `commax-elevator` | 엘리베이터 하강 호출 (`elevatorCall`) | **안정화 완료** | 실제 호출 트리거인 preamble 브로드캐스트(4회, 7/301/309ms 간격) + 15ms 버스트 2회 연속 전송 + ACK 검증/재시도 + 0x23 이동상태 연동, 실기 호출 성공 검증 완료 |
 | **가스밸브 (Gas)** | `commax-gas` (ID 1) | 밸브 상태 모니터링 및 원격 닫기 | **개발중** | 안전 규정에 따라 원격 닫기만 허용 (열기 불가) |
-| **공기질 센서 (Air Quality)** | `commax-airquality` | 실시간 CO2, 미세먼지(PM2.5/PM10) 모니터링 | **개발중** | CO2 파서 수정 완료(실시간 반응 확인). PM2.5/PM10 파서도 수정했으나 먼지센서 하드웨어 자체의 고장/미갱신 의심으로 실제 값 표시는 미확인 |
+| **공기질 센서 (Air Quality)** | `commax-airquality` | 실시간 CO2, 미세먼지(PM2.5/PM10) 모니터링 | **개발중** | CO2 파서 수정 완료(실시간 반응 확인). PM2.5가 잘못된 capability(`veryFineDustSensor`, PM1.0용)로 매핑되어 있던 오류를 `fineDustSensor`로 수정, 재배포 후 확인 필요 |
 
 ---
 
@@ -151,10 +151,9 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 
 ### 3.6 공기질 센서 (`commax:airquality`, 읽기전용, 명령 없음) — **개발중**
 
-CO2/PM2.5/PM10 모두 파서는 정상 반영됐으나, **PM2.5/PM10은 하드웨어 자체가 값을 갱신하지 않는 것으로 의심된다** (아래 참고).
-
 - **CO2**: 2026-09-22 실측으로 이 집 월패드가 `0x82` 대신 `0x80` 서브바이트로도 CO2를 방송한다는 걸 확인, 두 값 모두 인식하도록 수정 완료. 입김을 불어 CO2가 750ppm → 3664ppm까지 실시간으로 튀는 것까지 확인되어 정상 동작한다.
-- **PM2.5/PM10**: 같은 날 실측으로 `0xC8` 서브바이트가 `0x11`/`0x1F`가 아니라 `0x21`/`0x2F`라는 것도 확인, 두 변형 모두 인식하도록 수정 완료. 다만 이후 60초간 먼지를 직접 흔들며 재검증했을 때 PM 패킷이 **한 번도 올라오지 않았고**, 월패드 화면 자체도 특정 값("001")에 고정된 채 안 바뀐다는 보고가 있어 — **먼지센서 하드웨어 자체의 고장/미갱신 가능성이 높다.** 파서 문제는 해결됐지만 실제 값이 안 뜨는 건 소프트웨어로 해결할 수 없는 별개 이슈일 수 있다.
+- **PM2.5/PM10 파서**: 같은 날 실측으로 `0xC8` 서브바이트가 `0x11`/`0x1F`가 아니라 `0x21`/`0x2F`인 경우도 있다는 걸 확인, 두 변형 모두 인식하도록 수정 완료. 60~90초짜리 짧은 캡처에서 PM 패킷이 안 잡혀 한때 "먼지센서 하드웨어 고장"으로 의심했으나, 최초 45분 실측 로그(`tools/capture_20260917_175929.log`)를 다시 보면 PM 패킷은 **약 5분 간격으로 규칙적으로 방송**된다 — 짧은 캡처 창이 우연히 그 주기를 못 맞춘 것뿐이었다. 하드웨어 고장 의심은 근거 부족으로 철회.
+- **Capability 매핑 오류 (2026-09-26 발견 및 수정)**: `smartthings capabilities`로 실제 플랫폼에 확인한 결과 — `dustSensor`="Dust Sensor"(PM10), `fineDustSensor`="Fine Dust Sensor"(PM2.5), `veryFineDustSensor`="Very Fine Dust Sensor"(PM1.0, 이 집엔 데이터 없음). 기존 코드는 PM2.5를 `veryFineDustSensor`(PM1.0용 capability)로 잘못 보내고 있었다 — `fineDustSensor`로 수정, 프로필(`commax-airquality.yml`)에도 `fineDustSensor`를 추가하고 `veryFineDustSensor`는 제거했다. 파서가 정상이어도 이 capability 오배정 때문에 SmartThings 앱에 PM2.5 값 자체가 표시될 수 없었던 것으로 보인다.
 
 | 항목 | 패킷 | 출처 |
 |---|---|---|
@@ -207,7 +206,7 @@ CO2는 마지막 2바이트(6-7번째), PM2.5/PM10은 4-5번째 바이트를 2�
 | `commax-fan` | switch, fanSpeed, refresh | `handle_switch_on/off`, `handle_fan_speed` |
 | `commax-gas` | valve, refresh | `handle_valve_close` (open은 항상 차단) |
 | `commax-outlet` | switch, refresh | `handle_switch_on/off` |
-| `commax-airquality` | carbonDioxideMeasurement, dustSensor, veryFineDustSensor, refresh | 명령 없음(읽기 전용) |
+| `commax-airquality` | carbonDioxideMeasurement, dustSensor, fineDustSensor, refresh | 명령 없음(읽기 전용) |
 | `commax-elevator` | elevatorCall | `handle_elevator_call` (하강, preamble 4회 브로드캐스트 → 15ms 버스트 2회 전송 + ACK 검증/재시도) |
 
 데이터 흐름: `SmartThings Capability → device_handler.lua → commax_protocol.lua (패킷 생성) → ew11.lua (TCP 송신)`, 수신은 `ew11.lua (TCP 수신/프레이밍) → commax_protocol.lua (파싱) → device_handler.lua (Capability 이벤트 emit)`.
@@ -266,7 +265,6 @@ CO2는 마지막 2바이트(6-7번째), PM2.5/PM10은 4-5번째 바이트를 2�
 | 엘리베이터 상승호출 | 브릿지허브 앱에 상승 기능 자체가 없어 테스트 경로 없음. 하강 명령의 byte3/byte4(`40`/`07`)가 방향을 뜻하는지도 불확실해 임의로 값을 바꿔 만들어내지 않음 |
 | 콘센트 attr=0x02의 실제 의미 | 소비전력이 아님은 확인됨(반박). 진짜 의미는 불명 |
 | 상위 주소 체계(동/호수 등) | 참고 저장소·실측 모두 "기기군 Head + ID"만 확인됨, 상위 주소 바이트 없음 |
-| SmartThings capability ID 정확성 | 이 개발 환경에 SmartThings SDK가 없어 `carbonDioxideMeasurement`/`dustSensor`/`veryFineDustSensor` 등의 정확한 속성명을 검증 못함. 실제 Hub 설치 후 확인 필요 |
 | 환기팬 취침모드 뒷바이트 | 카운트다운 타이머로 추정되나 정확한 인코딩 불명. 제어에 불필요해 파싱 안 함 |
 
 ## 8. 프로젝트 구조

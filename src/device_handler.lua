@@ -103,12 +103,18 @@ function handler.handle_parsed_packet(driver, parsed)
     end
 
   -- 5. Air Quality Events (CO2 / PM2.5 / PM10) - read-only sensor, no commands
+  -- Capability mapping CONFIRMED 2026-09-26 via `smartthings capabilities`
+  -- against the real platform: dustSensor="Dust Sensor" (PM10),
+  -- fineDustSensor="Fine Dust Sensor" (PM2.5), veryFineDustSensor="Very
+  -- Fine Dust Sensor" (PM1.0, not tracked here - no PM1.0 data on this
+  -- bus). PM2.5 was previously wired to veryFineDustSensor (the PM1.0
+  -- capability) by mistake - fixed here to fineDustSensor.
   elseif parsed.device_type == "co2" then
     device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide({ value = parsed.ppm, unit = "ppm" }))
   elseif parsed.device_type == "pm10" then
     device:emit_event(capabilities.dustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
   elseif parsed.device_type == "pm25" then
-    device:emit_event(capabilities.veryFineDustSensor.veryFineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
+    device:emit_event(capabilities.fineDustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
 
   -- 6. Outlet Event
   elseif parsed.device_type == "outlet" then
