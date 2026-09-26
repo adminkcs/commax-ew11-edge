@@ -4,8 +4,6 @@ components:
     capabilities:
       - id: carbonDioxideMeasurement
         version: 1
-      - id: dustSensor
-        version: 1
       - id: fineDustSensor
         version: 1
       - id: refresh

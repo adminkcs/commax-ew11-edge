@@ -33,7 +33,9 @@ function handler.handle_parsed_packet(driver, parsed)
     target_dni = string.format("commax:fan:%d", parsed.id)
   elseif parsed.device_type == "gas" then
     target_dni = "commax:gas:1"
-  elseif parsed.device_type == "co2" or parsed.device_type == "pm25" or parsed.device_type == "pm10" then
+  elseif parsed.device_type == "co2" or parsed.device_type == "pm25" then
+    -- PM10 deliberately excluded here (see below) - this household has no
+    -- physical PM10 sensor.
     target_dni = "commax:airquality:1"
   elseif parsed.device_type == "outlet" then
     target_dni = string.format("commax:outlet:%d", parsed.id)
@@ -48,7 +50,7 @@ function handler.handle_parsed_packet(driver, parsed)
   -- "device not found" apart from "found but emit had no visible effect" -
   -- added 2026-09-26 while chasing reports of CO2/PM staying blank/NaN.
   -- Deliberately gated on device_type so no other device's logging changes.
-  local is_air_quality = (parsed.device_type == "co2" or parsed.device_type == "pm25" or parsed.device_type == "pm10")
+  local is_air_quality = (parsed.device_type == "co2" or parsed.device_type == "pm25")
   if is_air_quality then
     log.info(string.format("[AirQuality] Parsed packet: type=%s dni=%s ppm=%s ug_m3=%s",
       tostring(parsed.device_type), tostring(target_dni), tostring(parsed.ppm), tostring(parsed.ug_m3)))
@@ -120,13 +122,20 @@ function handler.handle_parsed_packet(driver, parsed)
       device:emit_event(capabilities.valve.valve.closed())
     end
 
-  -- 5. Air Quality Events (CO2 / PM2.5 / PM10) - read-only sensor, no commands
+  -- 5. Air Quality Events (CO2 / PM2.5) - read-only sensor, no commands
   -- Capability mapping CONFIRMED 2026-09-26 via `smartthings capabilities`
   -- against the real platform: dustSensor="Dust Sensor" (PM10),
   -- fineDustSensor="Fine Dust Sensor" (PM2.5), veryFineDustSensor="Very
-  -- Fine Dust Sensor" (PM1.0, not tracked here - no PM1.0 data on this
-  -- bus). PM2.5 was previously wired to veryFineDustSensor (the PM1.0
-  -- capability) by mistake - fixed here to fineDustSensor.
+  -- Fine Dust Sensor" (PM1.0). PM2.5 was previously wired to
+  -- veryFineDustSensor (the PM1.0 capability) by mistake - fixed here to
+  -- fineDustSensor.
+  --
+  -- PM10 intentionally NOT exposed - this household has no physical PM10
+  -- sensor (confirmed against the wallpad's own display, 2026-09-26); the
+  -- wallpad's "0x2F" packets just echo the PM2.5 reading into the PM10
+  -- slot, so showing it would be misleading. `parse_packet` still
+  -- recognizes "pm10" packets (commax_protocol.lua), but this handler and
+  -- the profile no longer route/expose them.
   --
   -- Attribute VALUE SHAPE also CONFIRMED 2026-09-26 via `smartthings
   -- capabilities`: carbonDioxide is type "number" and dustSensor/
@@ -138,9 +147,6 @@ function handler.handle_parsed_packet(driver, parsed)
   elseif parsed.device_type == "co2" then
     log.info(string.format("[AirQuality] Emitting CO2: %s ppm", tostring(parsed.ppm)))
     device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide(parsed.ppm))
-  elseif parsed.device_type == "pm10" then
-    log.info(string.format("[AirQuality] Emitting PM10: %s ug/m3", tostring(parsed.ug_m3)))
-    device:emit_event(capabilities.dustSensor.fineDustLevel(parsed.ug_m3))
   elseif parsed.device_type == "pm25" then
     log.info(string.format("[AirQuality] Emitting PM2.5: %s ug/m3", tostring(parsed.ug_m3)))
     device:emit_event(capabilities.fineDustSensor.fineDustLevel(parsed.ug_m3))
