@@ -154,6 +154,7 @@ RS485는 반이중(half-duplex) 공유 버스라서, 다른 기기가 동시에 
 - **CO2**: 2026-09-22 실측으로 이 집 월패드가 `0x82` 대신 `0x80` 서브바이트로도 CO2를 방송한다는 걸 확인, 두 값 모두 인식하도록 수정 완료. 입김을 불어 CO2가 750ppm → 3664ppm까지 실시간으로 튀는 것까지 확인되어 정상 동작한다.
 - **PM2.5/PM10 파서**: 같은 날 실측으로 `0xC8` 서브바이트가 `0x11`/`0x1F`가 아니라 `0x21`/`0x2F`인 경우도 있다는 걸 확인, 두 변형 모두 인식하도록 수정 완료. 60~90초짜리 짧은 캡처에서 PM 패킷이 안 잡혀 한때 "먼지센서 하드웨어 고장"으로 의심했으나, 최초 45분 실측 로그(`tools/capture_20260917_175929.log`)를 다시 보면 PM 패킷은 **약 5분 간격으로 규칙적으로 방송**된다 — 짧은 캡처 창이 우연히 그 주기를 못 맞춘 것뿐이었다. 하드웨어 고장 의심은 근거 부족으로 철회.
 - **Capability 매핑 오류 (2026-09-26 발견 및 수정)**: `smartthings capabilities`로 실제 플랫폼에 확인한 결과 — `dustSensor`="Dust Sensor"(PM10), `fineDustSensor`="Fine Dust Sensor"(PM2.5), `veryFineDustSensor`="Very Fine Dust Sensor"(PM1.0, 이 집엔 데이터 없음). 기존 코드는 PM2.5를 `veryFineDustSensor`(PM1.0용 capability)로 잘못 보내고 있었다 — `fineDustSensor`로 수정, 프로필(`commax-airquality.yml`)에도 `fineDustSensor`를 추가하고 `veryFineDustSensor`는 제거했다. 파서가 정상이어도 이 capability 오배정 때문에 SmartThings 앱에 PM2.5 값 자체가 표시될 수 없었던 것으로 보인다.
+- **속성 값 형태 오류 (2026-09-26 발견 및 수정)**: 같은 방식으로 확인한 결과, `carbonDioxide`(number)와 `dustSensor`/`fineDustSensor`의 `fineDustLevel`(integer) 모두 **객체가 아니라 순수 숫자 타입**이다. 기존 코드는 `{ value = ..., unit = "..." }` 테이블을 넘기고 있었는데, 이는 스키마와 안 맞아 `emit_event`가 실행돼도 값이 정상 반영되지 않았을 가능성이 높다 — CO2/PM2.5/PM10 전부 순수 숫자(`parsed.ppm`, `parsed.ug_m3`)만 넘기도록 수정했다. 이게 지금까지의 "파서는 맞는데 앱에 안 뜬다" 증상의 실제 원인이었을 가능성이 크다.
 
 | 항목 | 패킷 | 출처 |
 |---|---|---|

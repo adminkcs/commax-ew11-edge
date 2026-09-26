@@ -127,15 +127,23 @@ function handler.handle_parsed_packet(driver, parsed)
   -- Fine Dust Sensor" (PM1.0, not tracked here - no PM1.0 data on this
   -- bus). PM2.5 was previously wired to veryFineDustSensor (the PM1.0
   -- capability) by mistake - fixed here to fineDustSensor.
+  --
+  -- Attribute VALUE SHAPE also CONFIRMED 2026-09-26 via `smartthings
+  -- capabilities`: carbonDioxide is type "number" and dustSensor/
+  -- fineDustSensor's *DustLevel are type "integer" - plain scalars, not
+  -- objects. Previously passed as {value=..., unit=...} tables, which
+  -- don't match a plain number/integer attribute - very likely why these
+  -- events never rendered in the app even though emit_event was reached.
+  -- Now passing the bare numeric value.
   elseif parsed.device_type == "co2" then
     log.info(string.format("[AirQuality] Emitting CO2: %s ppm", tostring(parsed.ppm)))
-    device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide({ value = parsed.ppm, unit = "ppm" }))
+    device:emit_event(capabilities.carbonDioxideMeasurement.carbonDioxide(parsed.ppm))
   elseif parsed.device_type == "pm10" then
     log.info(string.format("[AirQuality] Emitting PM10: %s ug/m3", tostring(parsed.ug_m3)))
-    device:emit_event(capabilities.dustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
+    device:emit_event(capabilities.dustSensor.fineDustLevel(parsed.ug_m3))
   elseif parsed.device_type == "pm25" then
     log.info(string.format("[AirQuality] Emitting PM2.5: %s ug/m3", tostring(parsed.ug_m3)))
-    device:emit_event(capabilities.fineDustSensor.fineDustLevel({ value = parsed.ug_m3, unit = "ug/m3" }))
+    device:emit_event(capabilities.fineDustSensor.fineDustLevel(parsed.ug_m3))
 
   -- 6. Outlet Event
   elseif parsed.device_type == "outlet" then
